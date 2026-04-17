@@ -1,0 +1,2 @@
+[console_scripts]
+omni-cli = omni_cli.cli:main

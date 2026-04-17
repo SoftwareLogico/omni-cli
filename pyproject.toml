@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=69.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omni-cli"
+version = "1.0.0"
+description = "Pragmatic multi-provider, multi-agent terminal assistant"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "httpx>=0.28.1",
+  "mcp>=1.6.0",
+  "Pillow>=10.4.0",
+  "prompt-toolkit>=3.0.43",
+  "pypdf>=4.3.1",
+  "pypdfium2>=4.30.0",
+  "rich>=14.0.0",
+  "tomli>=2.0.1; python_version < '3.11'",
+]
+
+[project.scripts]
+omni-cli = "omni_cli.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["omni_cli*"]

@@ -1,0 +1,40 @@
+# Rename this file to omni.toml
+# This file should be in .gitignore so your keys never leak.
+
+[app]
+name = "omni-cli"
+data_dir = ".omni-cli"
+
+[runtime]
+primary_provider = "lmstudio"
+
+[tools]
+output_limit = 12000
+default_command_timeout_seconds = 120
+binary_check_size = 8192
+
+[providers.lmstudio]
+base_url = "http://192.168.1.XXX:1234/v1"
+model = "qwen/qwen3.6-35b-a3b"
+temperature = 0.2
+max_output_tokens = 32768
+
+[providers.openrouter]
+base_url = "https://openrouter.ai/api/v1"
+model = "x-ai/grok-4.1-fast"
+temperature = 0.2
+max_output_tokens = 32768
+http_referer = ""
+app_title = ""
+
+[providers.ollama]
+base_url = "http://192.168.1.XXX:11434/v1"
+model = "qwen3.5:9b"
+temperature = 0.2
+max_output_tokens = 32768
+
+[mcp.servers.test]
+command = "python"
+args = ["mcps/test.py"]
+
+

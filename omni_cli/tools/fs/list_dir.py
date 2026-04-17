@@ -1,0 +1,281 @@
+from __future__ import annotations
+
+from fnmatch import fnmatchcase
+import os
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from omni_cli.tools.utils.path_helpers import resolve_path
+from omni_cli.tools.utils.validators import _require_string
+
+
+_SUPPORTED_KINDS = {
+    "file",
+    "directory",
+    "symlink",
+    "symlink_file",
+    "symlink_directory",
+}
+
+
+def _normalize_optional_string(arguments: dict[str, Any], key: str) -> str | None:
+    value = arguments.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(f"{key} must be a string")
+    normalized = value.strip()
+    return normalized or None
+
+
+def _normalize_non_negative_int(value: Any, field_name: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a non-negative integer")
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be a non-negative integer") from exc
+    if normalized < 0:
+        raise ValueError(f"{field_name} must be a non-negative integer")
+    return normalized
+
+
+def _normalize_extensions(value: Any) -> set[str] | None:
+    if value is None:
+        return None
+
+    raw_values: list[str] = []
+    if isinstance(value, str):
+        raw_values = [part.strip() for part in value.split(",")]
+    elif isinstance(value, list):
+        for item in value:
+            if not isinstance(item, str):
+                raise ValueError("extensions must be a string or list of strings")
+            raw_values.extend(part.strip() for part in item.split(","))
+    else:
+        raise ValueError("extensions must be a string or list of strings")
+
+    normalized: set[str] = set()
+    for item in raw_values:
+        if not item:
+            continue
+        extension = item.lower()
+        if not extension.startswith("."):
+            extension = f".{extension}"
+        normalized.add(extension)
+
+    return normalized or None
+
+
+def _normalize_kind(arguments: dict[str, Any]) -> str | None:
+    value = arguments.get("kind")
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("kind must be a string")
+    normalized = value.strip().lower()
+    if normalized not in _SUPPORTED_KINDS:
+        supported = ", ".join(sorted(_SUPPORTED_KINDS))
+        raise ValueError(f"kind must be one of: {supported}")
+    return normalized
+
+
+def _iso_timestamp(timestamp: float | None) -> str | None:
+    if timestamp is None:
+        return None
+    return datetime.fromtimestamp(timestamp, tz=timezone.utc).isoformat()
+
+
+def _matches_kind(entry_kind: str, kind_filter: str | None) -> bool:
+    if kind_filter is None:
+        return True
+    if kind_filter == "symlink":
+        return entry_kind.startswith("symlink")
+    return entry_kind == kind_filter
+
+
+def _matches_glob(value: str, pattern: str) -> bool:
+    return fnmatchcase(value.lower(), pattern.lower())
+
+
+def _matches_filters(entry: dict[str, Any], filters: dict[str, Any]) -> bool:
+    name = str(entry["name"])
+    relative_path = str(entry["relative_path"])
+    absolute_path = str(entry["path"])
+    extension = str(entry["extension"])
+    kind = str(entry["kind"])
+    size_bytes = entry.get("size_bytes")
+
+    name_contains = filters.get("name_contains")
+    if isinstance(name_contains, str):
+        # Split by common separators to allow multiple keywords (e.g., "cv, resume")
+        # and treat them as an OR condition for the name_contains filter.
+        keywords = [k.strip().lower() for k in name_contains.split(",") if k.strip()]
+        if keywords and not any(kw in name.lower() for kw in keywords):
+            return False
+
+    path_contains = filters.get("path_contains")
+    if isinstance(path_contains, str):
+        path_contains_lower = path_contains.lower()
+        if path_contains_lower not in relative_path.lower() and path_contains_lower not in absolute_path.lower():
+            return False
+
+    name_pattern = filters.get("name_pattern")
+    if isinstance(name_pattern, str) and not _matches_glob(name, name_pattern):
+        return False
+
+    path_pattern = filters.get("path_pattern")
+    if isinstance(path_pattern, str):
+        if not _matches_glob(relative_path, path_pattern) and not _matches_glob(absolute_path, path_pattern):
+            return False
+
+    extensions = filters.get("extensions")
+    if isinstance(extensions, set) and extension.lower() not in extensions:
+        return False
+
+    kind_filter = filters.get("kind")
+    if isinstance(kind_filter, str) and not _matches_kind(kind, kind_filter):
+        return False
+
+    min_size_bytes = filters.get("min_size_bytes")
+    if isinstance(min_size_bytes, int) and isinstance(size_bytes, int) and size_bytes < min_size_bytes:
+        return False
+
+    max_size_bytes = filters.get("max_size_bytes")
+    if isinstance(max_size_bytes, int) and isinstance(size_bytes, int) and size_bytes > max_size_bytes:
+        return False
+
+    return True
+
+
+def execute_list_dir(arguments: dict[str, Any], root_dir: Path) -> dict[str, Any]:
+    path = resolve_path(_require_string(arguments, "path"), root_dir)
+    recursive = True
+    follow_symlinks = bool(arguments.get("follow_symlinks", False))
+    filters = {
+        "name_contains": _normalize_optional_string(arguments, "name_contains"),
+        "path_contains": _normalize_optional_string(arguments, "path_contains"),
+        "name_pattern": _normalize_optional_string(arguments, "name_pattern"),
+        "path_pattern": _normalize_optional_string(arguments, "path_pattern"),
+        "extensions": _normalize_extensions(arguments.get("extensions")),
+        "kind": _normalize_kind(arguments),
+        "min_size_bytes": _normalize_non_negative_int(arguments.get("min_size_bytes"), "min_size_bytes"),
+        "max_size_bytes": _normalize_non_negative_int(arguments.get("max_size_bytes"), "max_size_bytes"),
+    }
+    if not path.is_dir():
+        raise NotADirectoryError(f"Not a directory: {path}")
+    if (
+        isinstance(filters["min_size_bytes"], int)
+        and isinstance(filters["max_size_bytes"], int)
+        and filters["min_size_bytes"] > filters["max_size_bytes"]
+    ):
+        raise ValueError("min_size_bytes cannot be greater than max_size_bytes")
+
+    entries: list[dict[str, Any]] = []
+    visited_dirs: set[Path] = set()
+    scanned_entry_count = 0
+
+    def classify(candidate: Path) -> str:
+        if candidate.is_symlink():
+            try:
+                if candidate.resolve().is_dir():
+                    return "symlink_directory"
+            except OSError:
+                return "symlink"
+            return "symlink_file"
+        return "directory" if candidate.is_dir() else "file"
+
+    def collect(directory: Path, depth: int) -> None:
+        resolved_directory = directory.resolve()
+        if resolved_directory in visited_dirs:
+            return
+        visited_dirs.add(resolved_directory)
+
+        for child in sorted(directory.iterdir(), key=lambda item: item.name.lower()):
+            nonlocal scanned_entry_count
+            scanned_entry_count += 1
+
+            try:
+                stat_result = (
+                    os.stat(child, follow_symlinks=follow_symlinks)
+                    if follow_symlinks
+                    else os.lstat(child)
+                )
+                size_bytes = stat_result.st_size
+                modified_at = _iso_timestamp(stat_result.st_mtime)
+                accessed_at = _iso_timestamp(getattr(stat_result, "st_atime", None))
+                created_timestamp = getattr(stat_result, "st_birthtime", None)
+                if created_timestamp is None:
+                    created_timestamp = getattr(stat_result, "st_ctime", None)
+                created_at = _iso_timestamp(created_timestamp)
+            except OSError:
+                size_bytes = None
+                modified_at = None
+                accessed_at = None
+                created_at = None
+
+            kind = classify(child)
+            extension = child.suffix.lower()
+
+            entry = {
+                "name": child.name,
+                "relative_path": child.relative_to(path).as_posix(),
+                "path": str(child),
+                "kind": kind,
+                "depth": depth,
+                "extension": extension,
+                "extension_name": extension.lstrip("."),
+                "hidden": child.name.startswith("."),
+                "is_hidden": child.name.startswith("."),
+                "symlink": child.is_symlink(),
+                "is_symlink": child.is_symlink(),
+                "size_bytes": size_bytes,
+                "modified": modified_at,
+                "modified_at": modified_at,
+                "accessed": accessed_at,
+                "accessed_at": accessed_at,
+                "created": created_at,
+                "created_at": created_at,
+            }
+            if child.is_symlink():
+                try:
+                    entry["symlink_target"] = str(child.resolve(strict=True))
+                except OSError:
+                    entry["symlink_target"] = None
+
+            if _matches_filters(entry, filters):
+                entries.append(entry)
+
+            should_recurse = child.is_dir()
+            if child.is_symlink() and not follow_symlinks:
+                should_recurse = False
+            if should_recurse:
+                collect(child, depth + 1)
+
+    collect(path, 1)
+
+    normalized_filters = {
+        key: sorted(value) if isinstance(value, set) else value
+        for key, value in filters.items()
+        if value is not None
+    }
+    kind_counts: dict[str, int] = {}
+    for entry in entries:
+        kind = str(entry["kind"])
+        kind_counts[kind] = kind_counts.get(kind, 0) + 1
+
+    return {
+        "path": str(path),
+        "recursive": recursive,
+        "include_hidden": True,
+        "follow_symlinks": follow_symlinks,
+        "search_mode": bool(normalized_filters),
+        "filters": normalized_filters,
+        "scanned_entry_count": scanned_entry_count,
+        "entry_count": len(entries),
+        "kind_counts": kind_counts,
+        "entries": entries,
+    }
