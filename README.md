@@ -3,6 +3,7 @@
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
 [![Providers](https://img.shields.io/badge/Providers-OpenRouter%20%7C%20LMStudio%20%7C%20Ollama-brightgreen.svg)](https://github.com/softwarelogico/omni-cli)
 [![Stars](https://img.shields.io/github/stars/softwarelogico/omni-cli?style=social)](https://github.com/softwarelogico/omni-cli)
+[![License](https://img.shields.io/github/license/SoftwareLogico/omni-cli?style=flat&logo=mit)](LICENSE)
 
 <p align="center">
   <img src="assets/omni-robot.png" alt="omni-robot mascot" width="400">
