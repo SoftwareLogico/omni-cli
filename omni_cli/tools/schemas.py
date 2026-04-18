@@ -43,6 +43,9 @@ def get_tool_schemas() -> list[dict[str, Any]]:
                         "path_contains": {"type": "string", "description": "Optional case-insensitive substring filter applied to the relative path and absolute path."},
                         "name_pattern": {"type": "string", "description": "Optional basename glob pattern using wildcards like '*', '?', and '[]'. Case-insensitive."},
                         "path_pattern": {"type": "string", "description": "Optional relative-path or absolute-path glob pattern using wildcards like '*', '?', and '[]'. Case-insensitive."},
+                        "content_contains": {"type": "string", "description": "Optional text search inside file contents (UTF-8 text files). Supports multiple keywords separated by commas as OR."},
+                        "content_case_sensitive": {"type": "boolean", "description": "If true, content_contains is case-sensitive. Default false."},
+                        "content_max_bytes": {"type": "integer", "minimum": 0, "description": "Optional maximum file size in bytes for content_contains scanning. Files above this size are skipped. 0 means no size cap."},
                         "min_size_bytes": {"type": "integer", "minimum": 0, "description": "Optional minimum size in bytes."},
                         "max_size_bytes": {"type": "integer", "minimum": 0, "description": "Optional maximum size in bytes."},
                     },
@@ -314,9 +317,18 @@ def get_tool_schemas() -> list[dict[str, Any]]:
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "Absolute path or project-relative path already attached to the session source of truth."},
+                        "paths": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "minItems": 1,
+                            "description": "Batch removal: absolute paths or project-relative paths already attached to the session source of truth. Prefer this over multiple calls when detaching several paths."
+                        },
                     },
-                    "required": ["path"],
                     "additionalProperties": False,
+                    "oneOf": [
+                        {"required": ["path"]},
+                        {"required": ["paths"]}
+                    ],
                 },
             },
         },
@@ -329,11 +341,20 @@ def get_tool_schemas() -> list[dict[str, Any]]:
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "Absolute or project-relative path to attach."},
-                        "recursive": {"type": "boolean", "description": "Whether a directory attach should recurse."},
-                        "label": {"type": "string", "description": "Optional human label."},
+                        "paths": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "minItems": 1,
+                            "description": "Batch attach: absolute or project-relative paths to attach. Prefer this over multiple calls when attaching several paths."
+                        },
+                        "recursive": {"type": "boolean", "description": "Whether a directory attach should recurse. Applies to every path in the batch."},
+                        "label": {"type": "string", "description": "Optional human label. Only supported when attaching a single path."},
                     },
-                    "required": ["path"],
                     "additionalProperties": False,
+                    "oneOf": [
+                        {"required": ["path"]},
+                        {"required": ["paths"]}
+                    ],
                 },
             },
         },

@@ -10,8 +10,48 @@ from omni_cli.tools.utils.validators import (
     _ensure_no_arguments,
     _normalize_float,
     _normalize_positive_int,
-    _require_string,
 )
+
+
+def _dedupe_paths(paths: list[Path]) -> list[Path]:
+    seen: set[str] = set()
+    unique_paths: list[Path] = []
+    for path in paths:
+        resolved = str(path)
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique_paths.append(path)
+    return unique_paths
+
+
+
+def _resolve_source_argument_paths(
+    arguments: dict[str, Any],
+    root_dir: Path,
+) -> list[Path]:
+    raw_path = arguments.get("path")
+    raw_paths = arguments.get("paths")
+
+    if raw_path is None and raw_paths is None:
+        raise ValueError("Provide path or paths")
+
+    normalized_paths: list[Path] = []
+
+    if raw_path is not None:
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise ValueError("path must be a non-empty string")
+        normalized_paths.append(resolve_path(raw_path.strip(), root_dir))
+
+    if raw_paths is not None:
+        if not isinstance(raw_paths, list) or not raw_paths:
+            raise ValueError("paths must be a non-empty array of strings")
+        for index, item in enumerate(raw_paths):
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError(f"paths[{index}] must be a non-empty string")
+            normalized_paths.append(resolve_path(item.strip(), root_dir))
+
+    return _dedupe_paths(normalized_paths)
 
 
 def execute_get_session_state(
@@ -126,13 +166,34 @@ def execute_detach_path(
     session_id: str,
     root_dir: Path,
 ) -> dict[str, Any]:
-    raw_path = _require_string(arguments, "path")
-    path = resolve_path(raw_path, root_dir)
-    record, removed = runtime.sessions.remove_source_entry(session_id, path=path)
+    resolved_paths = _resolve_source_argument_paths(arguments, root_dir)
+    record = runtime.sessions.load(session_id)
+
+    # Best-effort: remove each path from session entries when present.
+    # Paths that are only tool-backed (not in session.source_entries) are
+    # accepted silently — they will be cleaned from the in-memory SoT by
+    # update_tracked_from_tool_result once this result is returned.
+    detached_from_session: list[str] = []
+    detached_ids: list[str] = []
+    tool_backed_only: list[str] = []
+
+    for path in resolved_paths:
+        try:
+            record, removed = runtime.sessions.remove_source_entry(session_id, path=path)
+            detached_from_session.append(str(path))
+            detached_ids.append(removed.id)
+        except FileNotFoundError:
+            tool_backed_only.append(str(path))
+
+    all_detached = detached_from_session + tool_backed_only
     return {
         "session_id": record.id,
-        "detached_path": str(path),
-        "entry_id": removed.id,
+        "detached_path": all_detached[0] if all_detached else "",
+        "detached_paths": all_detached,
+        "detached_from_session": detached_from_session,
+        "detached_from_context_only": tool_backed_only,
+        "detached_count": len(all_detached),
+        "entry_ids": detached_ids,
         "source_entries": len(record.source_entries),
     }
 
@@ -143,19 +204,32 @@ def execute_attach_path(
     session_id: str,
     root_dir: Path,
 ) -> dict[str, Any]:
-    path = _require_string(arguments, "path")
+    resolved_paths = _resolve_source_argument_paths(arguments, root_dir)
     recursive = bool(arguments.get("recursive", True))
     label = arguments.get("label")
-    resolved = resolve_path(path, root_dir)
-    record = runtime.sessions.attach_path(
-        session_id=session_id,
-        target_path=resolved,
-        label=str(label) if isinstance(label, str) and label.strip() else None,
-        recursive=recursive,
-    )
+    normalized_label = str(label).strip() if isinstance(label, str) and label.strip() else None
+    if normalized_label is not None and len(resolved_paths) > 1:
+        raise ValueError("label can only be used when attaching a single path")
+
+    missing_paths = [str(path) for path in resolved_paths if not path.exists()]
+    if missing_paths:
+        raise FileNotFoundError("Path not found: " + ", ".join(missing_paths))
+
+    record = runtime.sessions.load(session_id)
+    for path in resolved_paths:
+        record = runtime.sessions.attach_path(
+            session_id=session_id,
+            target_path=path,
+            label=normalized_label,
+            recursive=recursive,
+        )
+
+    attached_paths = [str(path) for path in resolved_paths]
     return {
         "session_id": record.id,
-        "attached_path": str(resolved),
+        "attached_path": attached_paths[0],
+        "attached_paths": attached_paths,
+        "attached_count": len(attached_paths),
         "recursive": recursive,
         "source_entries": len(record.source_entries),
     }

@@ -166,9 +166,9 @@ Usage:
 - The application value is passed through generically. Use the exact application name, command name, or executable path that best matches the user's request on the current OS."""
 
 LIST_DIR_PROMPT = """\
-List or search files and folders inside a directory. This tool is always recursive and always includes hidden files; there is no hidden-file filtering and no built-in result limit. \
+List and search files/folders inside a directory. Use it for both: full listings and targeted searches. This tool is always recursive and always includes hidden files; there is no hidden-file filtering and no built-in result limit. \
 It returns files, folders, and symlinks with full absolute paths, relative paths, folder/file names, depth, extension, size, timestamps, hidden status, symlink status, and symlink targets when available. \
-Prefer this tool over run_command for file discovery, filtering by extension, name, path, or size, and narrowing candidates before reading or opening files. \
+Prefer this tool over run_command for discovery/filtering by extension, name, path, size, and optional content text matching before reading or opening files. \
 You can use it as a search tool with these optional filters: \
 - kind: file, directory, symlink, symlink_file, symlink_directory; \
 - extensions: list of extensions like ['.png', '.jpg'] or ['png', 'jpg']; \
@@ -176,6 +176,9 @@ You can use it as a search tool with these optional filters: \
 - path_contains: case-insensitive substring match on the relative path or absolute path; \
 - name_pattern: glob-style basename filter using *, ?, and []; \
 - path_pattern: glob-style relative-path or absolute-path filter using *, ?, and []; \
+- content_contains: case-insensitive text search inside UTF-8 text files (txt/json/xml/md/sql/py/etc), supports comma-separated keywords as OR; \
+- content_case_sensitive: set true when you need exact case matching for content_contains; \
+- content_max_bytes: optional max file size for content search (skip bigger files); \
 - min_size_bytes and max_size_bytes: filter by size. \
 Use follow_symlinks=true only when you want to recurse through symlinked directories."""
 
@@ -308,12 +311,13 @@ Supported changes:
 Use this to change the active runtime for future turns in the current session. If provider changes and model is omitted, the provider's configured default model is used."""
 
 DETACH_PATH_PROMPT = """\
-Remove a file or directory from the session source of truth.
+Remove one or more files or directories from the session source of truth.
 
-Use this when a path should no longer be considered part of the authoritative working set for the session."""
+Use path for a single target or paths for batch removal. Prefer a single batch call when removing multiple paths from the authoritative working set for the session."""
 
 ATTACH_PATH_PROMPT = """\
-Attach a file or directory to the session source of truth so future turns can reference it. \
+Attach one or more files or directories to the session source of truth so future turns can reference them. \
+Use path for a single target or paths for batch attach. Prefer a single batch call when attaching multiple paths. \
 Text files are included in future requests automatically; binary or non-decodable files remain as tracked references."""
 
 FILE_UNCHANGED_STUB = "File unchanged since last read."

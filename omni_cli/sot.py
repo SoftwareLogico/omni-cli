@@ -157,6 +157,21 @@ def update_tracked_from_tool_result(
             state.session_tracked_file_paths.discard(fpath)
             state.session_tracked_media_paths.discard(fpath)
 
+    if tool_name == "detach_path_from_source":
+        # Remove both session-backed and tool-backed paths from the in-memory SoT.
+        # detached_paths contains ALL paths that were requested (regardless of
+        # whether they were in session.source_entries or only tool-backed).
+        detached = payload.get("detached_paths")
+        if not isinstance(detached, list):
+            single = payload.get("detached_path")
+            detached = [single] if isinstance(single, str) and single else []
+        for fpath in detached:
+            if isinstance(fpath, str) and fpath:
+                state.tracked_files.pop(fpath, None)
+                state.tracked_media.pop(fpath, None)
+                state.session_tracked_file_paths.discard(fpath)
+                state.session_tracked_media_paths.discard(fpath)
+
 
 def build_sot_payload_message(state: SoTState) -> dict[str, Any] | None:
     if not state.tracked_files and not state.tracked_media:

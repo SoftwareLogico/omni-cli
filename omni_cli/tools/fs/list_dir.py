@@ -101,6 +101,59 @@ def _matches_glob(value: str, pattern: str) -> bool:
     return fnmatchcase(value.lower(), pattern.lower())
 
 
+def _split_keywords(value: str) -> list[str]:
+    return [part.strip() for part in value.split(",") if part.strip()]
+
+
+def _looks_like_text_file(path: Path) -> bool:
+    try:
+        chunk = path.read_bytes()[:8192]
+    except OSError:
+        return False
+
+    if not chunk:
+        return True
+    if b"\x00" in chunk:
+        return False
+    try:
+        chunk.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return True
+
+
+def _search_keywords_in_text_file(
+    path: Path,
+    keywords: list[str],
+    *,
+    case_sensitive: bool,
+    max_bytes: int | None,
+) -> tuple[list[str] | None, str | None]:
+    try:
+        size_bytes = path.stat().st_size
+    except OSError:
+        return None, "stat_error"
+
+    if isinstance(max_bytes, int) and max_bytes > 0 and size_bytes > max_bytes:
+        return None, "too_large"
+
+    if not _looks_like_text_file(path):
+        return None, "not_text"
+
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError):
+        return None, "read_error"
+
+    if case_sensitive:
+        matched = [keyword for keyword in keywords if keyword in content]
+    else:
+        content_lower = content.lower()
+        matched = [keyword for keyword in keywords if keyword.lower() in content_lower]
+
+    return matched, None
+
+
 def _matches_filters(entry: dict[str, Any], filters: dict[str, Any]) -> bool:
     name = str(entry["name"])
     relative_path = str(entry["relative_path"])
@@ -111,9 +164,8 @@ def _matches_filters(entry: dict[str, Any], filters: dict[str, Any]) -> bool:
 
     name_contains = filters.get("name_contains")
     if isinstance(name_contains, str):
-        # Split by common separators to allow multiple keywords (e.g., "cv, resume")
-        # and treat them as an OR condition for the name_contains filter.
-        keywords = [k.strip().lower() for k in name_contains.split(",") if k.strip()]
+        # Support comma-separated keywords and treat them as OR.
+        keywords = [k.lower() for k in _split_keywords(name_contains)]
         if keywords and not any(kw in name.lower() for kw in keywords):
             return False
 
@@ -155,6 +207,9 @@ def execute_list_dir(arguments: dict[str, Any], root_dir: Path) -> dict[str, Any
     path = resolve_path(_require_string(arguments, "path"), root_dir)
     recursive = True
     follow_symlinks = bool(arguments.get("follow_symlinks", False))
+    content_contains = _normalize_optional_string(arguments, "content_contains")
+    content_case_sensitive = bool(arguments.get("content_case_sensitive", False))
+    content_max_bytes = _normalize_non_negative_int(arguments.get("content_max_bytes"), "content_max_bytes")
     filters = {
         "name_contains": _normalize_optional_string(arguments, "name_contains"),
         "path_contains": _normalize_optional_string(arguments, "path_contains"),
@@ -177,6 +232,15 @@ def execute_list_dir(arguments: dict[str, Any], root_dir: Path) -> dict[str, Any
     entries: list[dict[str, Any]] = []
     visited_dirs: set[Path] = set()
     scanned_entry_count = 0
+    content_keywords = _split_keywords(content_contains) if isinstance(content_contains, str) else []
+    content_scan_stats = {
+        "enabled": bool(content_keywords),
+        "searched_files": 0,
+        "matched_files": 0,
+        "skipped_non_text": 0,
+        "skipped_too_large": 0,
+        "skipped_errors": 0,
+    }
 
     def classify(candidate: Path) -> str:
         if candidate.is_symlink():
@@ -247,7 +311,29 @@ def execute_list_dir(arguments: dict[str, Any], root_dir: Path) -> dict[str, Any
                     entry["symlink_target"] = None
 
             if _matches_filters(entry, filters):
-                entries.append(entry)
+                if content_keywords:
+                    if entry["kind"] in {"file", "symlink_file"}:
+                        content_scan_stats["searched_files"] += 1
+                        matched_keywords, skip_reason = _search_keywords_in_text_file(
+                            child,
+                            content_keywords,
+                            case_sensitive=content_case_sensitive,
+                            max_bytes=content_max_bytes,
+                        )
+                        if skip_reason == "not_text":
+                            content_scan_stats["skipped_non_text"] += 1
+                        elif skip_reason == "too_large":
+                            content_scan_stats["skipped_too_large"] += 1
+                        elif skip_reason in {"stat_error", "read_error"}:
+                            content_scan_stats["skipped_errors"] += 1
+
+                        if isinstance(matched_keywords, list) and matched_keywords:
+                            entry["content_match"] = True
+                            entry["content_matched_keywords"] = matched_keywords
+                            entries.append(entry)
+                            content_scan_stats["matched_files"] += 1
+                else:
+                    entries.append(entry)
 
             should_recurse = child.is_dir()
             if child.is_symlink() and not follow_symlinks:
@@ -262,6 +348,12 @@ def execute_list_dir(arguments: dict[str, Any], root_dir: Path) -> dict[str, Any
         for key, value in filters.items()
         if value is not None
     }
+    if content_contains:
+        normalized_filters["content_contains"] = content_contains
+        normalized_filters["content_case_sensitive"] = content_case_sensitive
+    if isinstance(content_max_bytes, int):
+        normalized_filters["content_max_bytes"] = content_max_bytes
+
     kind_counts: dict[str, int] = {}
     for entry in entries:
         kind = str(entry["kind"])
@@ -277,5 +369,6 @@ def execute_list_dir(arguments: dict[str, Any], root_dir: Path) -> dict[str, Any
         "scanned_entry_count": scanned_entry_count,
         "entry_count": len(entries),
         "kind_counts": kind_counts,
+        "content_scan": content_scan_stats,
         "entries": entries,
     }

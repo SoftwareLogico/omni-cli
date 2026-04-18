@@ -746,10 +746,20 @@ def _build_tool_result_summary(tool_result: Any) -> str:
         return f"delegated task {agent_id} {status}. Use wait_task to get the result."
 
     if name == "attach_path_to_source":
-        attached = payload.get("attached_path", "?")
-        mode = payload.get("mode", "?")
+        attached_paths = payload.get("attached_paths")
         entries = payload.get("source_entries", "?")
-        return f"attached {attached} mode={mode} (entries={entries})"
+        if isinstance(attached_paths, list) and len(attached_paths) > 1:
+            return f"attached {len(attached_paths)} paths (entries={entries})"
+        attached = payload.get("attached_path", "?")
+        return f"attached {attached} (entries={entries})"
+
+    if name == "detach_path_from_source":
+        detached_paths = payload.get("detached_paths")
+        entries = payload.get("source_entries", "?")
+        if isinstance(detached_paths, list) and len(detached_paths) > 1:
+            return f"detached {len(detached_paths)} paths (entries={entries})"
+        detached = payload.get("detached_path", "?")
+        return f"detached {detached} (entries={entries})"
 
     if name == "delete_file":
         fpath = payload.get("path", "?")

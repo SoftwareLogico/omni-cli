@@ -109,6 +109,36 @@ No parameters. Returns delegated tasks and status (RUNNING/COMPLETED). Prefer `w
 - Delegated agents inherit runtime context and session storage rules (including `OMNI_SESSIONS_DIR` when set).
 - Boss/Worker prompt separation is enforced by the runtime (`AGENT_SYSTEM_PROMPT` vs `SUB_AGENT_SYSTEM_PROMPT`).
 
+## File Discovery Tool (`list_dir`)
+
+`list_dir` is a dual-purpose tool: it can return broad recursive listings and it can act as a filtered search tool.
+
+Current behavior:
+
+- Always recursive.
+- Always includes hidden files.
+- No built-in result limit by default.
+- Returns rich metadata per entry (name, absolute/relative path, type, depth, extension, size, timestamps, hidden/symlink flags, symlink target when available).
+
+Supported filters:
+
+- `kind`: `file`, `directory`, `symlink`, `symlink_file`, `symlink_directory`.
+- `extensions`: extension filter list (accepts `.py` and `py` formats).
+- `name_contains`: case-insensitive basename substring, supports comma-separated OR keywords.
+- `path_contains`: case-insensitive relative/absolute path substring.
+- `name_pattern`: glob pattern on basename (`*`, `?`, `[]`).
+- `path_pattern`: glob pattern on path (`*`, `?`, `[]`).
+- `min_size_bytes` / `max_size_bytes`: numeric size filters.
+- `follow_symlinks`: recurse through symlink directories when `true`.
+
+Content search mode:
+
+- `content_contains`: search text inside UTF-8 text files (for example `txt`, `json`, `xml`, `md`, `sql`, `py`, etc.).
+- `content_case_sensitive`: make `content_contains` matching case-sensitive.
+- `content_max_bytes`: optional max file size for content scanning; larger files are skipped.
+
+When `content_contains` is used, matching entries include content match metadata and the tool returns aggregate content scan statistics (`searched_files`, `matched_files`, and skipped counters).
+
 ## Main components
 
 ### `omni_cli/query.py`
@@ -155,6 +185,42 @@ Example `omni.toml` MCP entry:
 
 - `session-backed`: Comes from the persisted source of the session. Refreshed at the start of each turn.
 - `tool-backed`: Appeared by a reading or mutation made during the interactive session. Persists between interactive turns until explicitly deleted.
+
+### SoT management tools
+
+The model can modify the authoritative working set of the session at any time using these tools:
+
+#### `attach_path_to_source`
+
+Add a file or directory to the session source of truth. Accepts a single path (`path`) or multiple paths in one call (`paths`). Prefer `paths` for batch attach.
+
+Parameters:
+
+- `path` (string): absolute or project-relative path to attach.
+- `paths` (array of strings): batch variant — attach several paths in one call. Use this instead of multiple `attach_path_to_source` calls.
+- `recursive` (boolean, default `true`): whether to recurse into directories. Applies to every path in the batch.
+- `label` (string, optional): human label; only supported with a single path.
+
+Either `path` or `paths` is required.
+
+#### `detach_path_from_source`
+
+Remove a file or directory from the session source of truth. Accepts a single path (`path`) or multiple paths in one call (`paths`). Prefer `paths` for batch removal.
+
+Parameters:
+
+- `path` (string): absolute path or project-relative path already attached to the session.
+- `paths` (array of strings): batch variant — remove several paths in one call. Use this instead of multiple `detach_path_from_source` calls.
+
+Either `path` or `paths` is required.
+
+#### `get_session_state`
+
+Inspect the current session: provider, model, temperature, max output tokens, and the full list of session-backed source entries with their IDs and metadata. Use this before attaching or detaching to confirm the current state. No parameters.
+
+#### `update_session`
+
+Change runtime parameters for future turns in the current session: `title`, `provider`, `model`, `temperature`, `max_output_tokens`. At least one field required.
 
 ## Known current limitations
 
