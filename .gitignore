@@ -13,3 +13,5 @@ omni.keys.toml
 .env
 
 .omni-cli/
+uv.lock
+omni_cli.egg-info/
