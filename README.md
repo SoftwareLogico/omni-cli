@@ -98,8 +98,13 @@
    # Resume a previous session
 
    omni-cli <session_id>
-
    ```
+
+## Platform Compatibility
+
+- ✅ **macOS**: Fully tested and compatible.
+- ⏳ **Windows**: Pending testing.
+- ⏳ **Linux**: Pending testing.
 
 ## 🧠 The Core Concept: The SoT Method
 

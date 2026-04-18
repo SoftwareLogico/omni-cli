@@ -13,7 +13,7 @@ else:
 
 ProviderName = Literal["lmstudio", "openrouter", "openai", "xai", "ollama"]
 
-DEFAULT_CONFIG_TEMPLATE = (Path(__file__).resolve().parents[2] / "omni.example.toml").read_text(
+DEFAULT_CONFIG_TEMPLATE = (Path(__file__).resolve().parents[2] / "omni.toml").read_text(
     encoding="utf-8"
 )
 KNOWN_PROVIDERS: tuple[ProviderName, ...] = ("lmstudio", "openrouter", "openai", "xai", "ollama")
@@ -101,7 +101,7 @@ def load_config(config_path: str | Path | None = None) -> AppConfig:
     path = resolve_config_path(config_path)
     if not path.exists():
         raise FileNotFoundError(
-            f"Config file not found: {path}. Run 'omni-cli init-config' or copy omni.example.toml to omni.toml."
+            f"Config file not found: {path}. Run 'omni-cli init-config' or copy omni.toml to omni.toml."
         )
 
     with path.open("rb") as handle:
