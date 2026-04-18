@@ -63,6 +63,8 @@ def get_tool_schemas() -> list[dict[str, Any]]:
                     "type": "object",
                     "properties": {
                         "path": {"type": "string", "description": "Absolute path or project-relative path to the file."},
+                        "start_line": {"type": "integer", "minimum": 1, "description": "Optional 1-indexed starting line for a targeted text excerpt. Use only for very large UTF-8 text files when a full read would be wasteful."},
+                        "end_line": {"type": "integer", "minimum": 1, "description": "Optional 1-indexed ending line for a targeted text excerpt. Must be used together with start_line."},
                         "pages": {"type": "string", "description": "Optional PDF page range like '1-5' or '3'. Only valid for PDF files."},
                         "password": {"type": "string", "description": "Optional password for encrypted/protected PDF files. If a PDF fails due to encryption, ask the user for the password and retry with this parameter."},
                     },
@@ -86,6 +88,8 @@ def get_tool_schemas() -> list[dict[str, Any]]:
                                 "type": "object",
                                 "properties": {
                                     "path": {"type": "string", "description": "Absolute path or project-relative path to the file."},
+                                    "start_line": {"type": "integer", "minimum": 1, "description": "Optional 1-indexed starting line for a targeted text excerpt. Use only for very large UTF-8 text files when a full read would be wasteful."},
+                                    "end_line": {"type": "integer", "minimum": 1, "description": "Optional 1-indexed ending line for a targeted text excerpt. Must be used together with start_line."},
                                     "pages": {"type": "string", "description": "Optional PDF page range like '1-5' or '3'. Only valid for PDF files."},
                                     "password": {"type": "string", "description": "Optional password for encrypted/protected PDF files."},
                                 },

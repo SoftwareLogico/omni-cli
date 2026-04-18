@@ -21,7 +21,55 @@ from omni_cli.tools.reader.notebook import read_notebook
 from omni_cli.tools.reader.pdf import read_pdf
 from omni_cli.tools.utils.formatters import _file_mtime_ns
 from omni_cli.tools.utils.path_helpers import _find_similar_file, _is_blocked_device
-from omni_cli.tools.utils.validators import _normalize_pages_argument, _require_string
+from omni_cli.tools.utils.validators import _normalize_pages_argument, _normalize_positive_int, _require_string
+
+
+def _normalize_line_range(arguments: dict[str, Any]) -> tuple[int | None, int | None]:
+    raw_start_line = arguments.get("start_line")
+    raw_end_line = arguments.get("end_line")
+    if raw_start_line is None and raw_end_line is None:
+        return None, None
+    if raw_start_line is None or raw_end_line is None:
+        raise ValueError("start_line and end_line must be provided together")
+
+    start_line = _normalize_positive_int(raw_start_line, "start_line")
+    end_line = _normalize_positive_int(raw_end_line, "end_line")
+    if end_line < start_line:
+        raise ValueError("end_line must be greater than or equal to start_line")
+    return start_line, end_line
+
+
+def _read_text_with_optional_line_range(
+    path: Path,
+    start_line: int | None,
+    end_line: int | None,
+) -> tuple[str, int, bool]:
+    if start_line is None or end_line is None:
+        content = path.read_text(encoding="utf-8")
+        total_lines = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
+        return content, total_lines, False
+
+    collected_lines: list[str] = []
+    total_lines = 0
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for total_lines, line in enumerate(handle, start=1):
+                if start_line <= total_lines <= end_line:
+                    collected_lines.append(line)
+    except UnicodeDecodeError as exc:
+        raise ValueError(
+            "Cannot decode file as UTF-8 text. The file may be binary. "
+            "Use run_command with xxd or file to inspect it."
+        ) from exc
+
+    if total_lines == 0:
+        raise ValueError("Cannot target line ranges in an empty file")
+    if end_line > total_lines:
+        raise ValueError(
+            f"Line range {start_line}-{end_line} is outside the file (total lines: {total_lines})"
+        )
+
+    return "".join(collected_lines), total_lines, True
 
 
 def execute_read_many_files(
@@ -178,6 +226,7 @@ def execute_read_text_file(
     raw_pages = arguments.get("pages")
     pages = _normalize_pages_argument(raw_pages)
     password: str | None = arguments.get("password")
+    start_line, end_line = _normalize_line_range(arguments)
 
     # Block device paths that would hang
     if _is_blocked_device(resolved):
@@ -201,9 +250,11 @@ def execute_read_text_file(
 
     if pages and ext not in PDF_EXTENSIONS:
         raise ValueError("The pages parameter is only valid for PDF files.")
+    if start_line is not None and ext in IMAGE_EXTENSIONS | PDF_EXTENSIONS | NOTEBOOK_EXTENSIONS | AUDIO_EXTENSIONS | VIDEO_EXTENSIONS:
+        raise ValueError("start_line and end_line are only valid for UTF-8 text files.")
 
     # ── Cache check ──
-    cached = read_cache.get((resolved, pages))
+    cached = read_cache.get((resolved, pages, start_line, end_line))
     if cached is not None:
         cached_modified_ns, _ = cached
         if cached_modified_ns == modified_ns:
@@ -214,7 +265,7 @@ def execute_read_text_file(
             }
 
     def _store(result: dict[str, Any]) -> dict[str, Any]:
-        read_cache[(resolved, pages)] = (modified_ns, result)
+        read_cache[(resolved, pages, start_line, end_line)] = (modified_ns, result)
         return result
 
     # ── Image ──
@@ -241,27 +292,40 @@ def execute_read_text_file(
     if ext in BINARY_EXTENSIONS or _is_probably_binary(path, binary_check_size):
         _raise_binary_error(ext, path)
 
-    try:
-        content = path.read_text(encoding="utf-8")
-    except UnicodeDecodeError:
-        raise ValueError(
-            f"Cannot decode file as UTF-8 text. The file may be binary. "
-            f"Use run_command with xxd or file to inspect it."
-        )
+    content, total_lines, is_partial = _read_text_with_optional_line_range(path, start_line, end_line)
 
     if not content:
-        return _store({
+        result = {
             "path": resolved,
             "warning": "The file exists but the contents are empty.",
             "content": "",
             "size_bytes": 0,
-        })
+            "total_lines": total_lines,
+        }
+        if is_partial:
+            result.update(
+                {
+                    "partial": True,
+                    "start_line": start_line,
+                    "end_line": end_line,
+                    "returned_lines": 0,
+                }
+            )
+        return _store(result)
 
-    total_lines = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
-
-    return _store({
+    result = {
         "path": resolved,
         "content": content,
         "size_bytes": size_bytes,
         "total_lines": total_lines,
-    })
+    }
+    if is_partial:
+        result.update(
+            {
+                "partial": True,
+                "start_line": start_line,
+                "end_line": end_line,
+                "returned_lines": content.count("\n") + (1 if content and not content.endswith("\n") else 0),
+            }
+        )
+    return _store(result)

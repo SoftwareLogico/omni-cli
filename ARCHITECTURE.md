@@ -140,6 +140,29 @@ Content search mode:
 
 When `content_contains` is used, matching entries include content match metadata and the tool returns aggregate content scan statistics (`searched_files`, `matched_files`, and skipped counters).
 
+Typical read flow:
+
+- Use `list_dir` first when you need to discover or narrow down files.
+- Once you know the exact path set, switch to `read_text_file` for one file or `read_many_files` for a batch.
+- Prefer full-file reads whenever practical so the Source of Truth receives the whole authoritative file snapshot.
+- Reserve line-range reads for very large UTF-8 text files or targeted follow-up inspection.
+
+## File Reading Tools (`read_text_file`, `read_many_files`)
+
+`read_text_file` reads one file. `read_many_files` batches multiple known paths into one call.
+
+Text file behavior:
+
+- Full reads are the default and are the preferred mode.
+- `start_line` and `end_line` are optional for UTF-8 text files and define a 1-indexed inclusive range.
+- Partial line reads are inspection-only. They do not hydrate the full file into the SoT, which avoids replacing a full authoritative snapshot with a fragment.
+- If you want a file to be fully present in the SoT for subsequent reasoning, do a full read.
+
+Non-text behavior:
+
+- PDFs use `pages` rather than `start_line`/`end_line`.
+- Images, notebooks, audio, and video do not support line ranges.
+
 ## Main components
 
 ### `omni_cli/query.py`
@@ -228,4 +251,5 @@ Change runtime parameters for future turns in the current session: `title`, `pro
 
 1. Resume/recovery currently depends on reconstructing `chat_history` and SoT state from persisted request/response artifacts.
 2. `edit_file` works by exact match. `apply_text_edits` adds line ranges, but neither is a regex engine nor an AST editor.
-3. Archive files (`zip`, `tar`, `gz`, etc.) cannot be read directly. The model receives a format-specific error with the correct `run_command` invocation to list or extract contents.
+3. `read_text_file` supports targeted line-range inspection for UTF-8 text files, but partial reads intentionally do not populate the SoT as full-file snapshots.
+4. Archive files (`zip`, `tar`, `gz`, etc.) cannot be read directly. The model receives a format-specific error with the correct `run_command` invocation to list or extract contents.

@@ -47,7 +47,7 @@ class ToolRegistry:
         self.capability = capability
         self.model = model
         self.disable_delegation = disable_delegation
-        self._read_cache: dict[tuple[str, str | None], tuple[int, dict[str, Any]]] = {}
+        self._read_cache: dict[tuple[str, str | None, int | None, int | None], tuple[int, dict[str, Any]]] = {}
 
     def schemas(self) -> list[dict[str, Any]]:
         schemas = get_tool_schemas()

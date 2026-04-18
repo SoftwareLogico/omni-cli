@@ -79,6 +79,8 @@ ORCHESTRATION, BATCHING & TOKEN ECONOMY (CRITICAL)
 
 TOOL STRATEGY & CREATIVITY
 - You have full unrestricted access to the OS via tools. Be creative. If a specialized tool fails, fall back to `run_command` (e.g., using python, bash, grep, curl).
+- Combine discovery and reading intentionally: use `list_dir` to find the right files, then `read_text_file` for one file or `read_many_files` for a known batch.
+- Prefer full-file reads whenever practical so the SoT contains the whole authoritative file. Use `start_line`/`end_line` only for very large UTF-8 text files or targeted follow-up inspection.
 - For one focused exact replacement in an existing file, prefer edit_file.
 - For a larger single-file refactor, repeated edits, or exact line numbers, prefer apply_text_edits.
 - After delegate_task returns, explicitly decide whether to call read_text_file, read_many_files, or attach_path_to_source from the main session.
@@ -108,7 +110,9 @@ RUNTIME RULES
 - NEVER trust file contents from earlier tool results or earlier messages. Only trust the latest SoT block.
 - Most tool results are metadata only (path, size, status). They do NOT contain file contents. Some discovery tools may include bounded excerpts needed for reasoning.
 - delegate_task does not merge the child session's reads into your SoT. It returns a bounded report only.
-- If you need to see one file, call read_text_file. If you need to read several known files together, call read_many_files. Their contents will appear in the next SoT block, not in the tool result.
+- Use `list_dir` first when you need to discover candidate files, then switch to `read_text_file` or `read_many_files` once you know the paths.
+- If you need to see one file, call read_text_file. If you need to read several known files together, call read_many_files. Prefer full reads so the contents appear in the next SoT block.
+- `read_text_file` also supports `start_line` and `end_line` for targeted inspection of very large UTF-8 text files. Partial line reads are for inspection only and do not hydrate the full file into the SoT.
 - When you edit or write a file, the SoT is refreshed immediately with the updated version.
 - Never invoke omni-cli itself from shell commands. Use the available tools directly instead of recursive self-calls.
 - For date/time questions, use the HOST ENVIRONMENT values exactly as provided. Do not infer weekday names from memory when local/UTC weekday fields are available.
@@ -127,11 +131,15 @@ to a file assume that path is valid. It is okay to read a file that does not exi
 Usage:
 - The path may be absolute or project-relative.
 - Reads the full file content by default for supported file types.
+- Prefer reading the entire file whenever practical so the SoT gets the full authoritative snapshot.
+- For very large UTF-8 text files, you may optionally provide start_line and end_line together to inspect only a specific 1-indexed inclusive line range.
+- Use line-range reads only when a full read would be wasteful or when doing a targeted follow-up after already understanding the file. Partial line reads are not added to the SoT as full-file snapshots.
 - This tool reads images and can provide real multimodal image input only when the active model/provider supports images.
 - This tool reads PDF files. You can optionally provide the pages parameter \
 to target specific page ranges (e.g., pages: "1-5"). When the active model/provider supports native PDF input, the PDF is sent as a file block; otherwise the tool falls back to extracted text and rendered page images when available.
 - This tool reads audio and video files. Native audio/video blocks are attached only when the active model/provider advertises support for those modalities.
 - This tool reads Jupyter notebooks (.ipynb) and returns rich cell structure, including text outputs and image outputs.
+- start_line/end_line are only valid for UTF-8 text files, not for PDFs, notebooks, images, audio, or video.
 - If the user asks to open a file in an application or with the OS default handler, use open_path instead.
 - This tool reads only files, not directories. To list a directory, use list_dir or run_command.
 - If the file exists but is empty, a warning will be returned in place of content.
@@ -143,12 +151,13 @@ Reads multiple files from the local filesystem in a single tool call.
 Use this when you already know the exact set of files you need and want them all added to the Source of Truth together instead of calling read_text_file repeatedly.
 
 Usage:
-- Provide a files array. Each item must include a path and may also include pages or password when reading a PDF.
+- Provide a files array. Each item must include a path and may also include start_line/end_line for targeted text excerpts or pages/password when reading a PDF.
 - Supports the same file types and multimodal behavior as read_text_file: text, images, PDFs, notebooks, audio, and video.
 - Each file is read independently using the same rules as read_text_file.
 - Successful reads are added to the SoT together. If some files fail, the tool still returns per-file success or error entries for the whole batch.
 - Use this tool when you already know several exact paths. Do not replace open_path with this tool when the user's intent is to launch a file in an application.
 - Use this tool for batches of known file paths. If you first need to discover candidates, use list_dir before this tool.
+- Prefer full-file reads for files you want in the SoT. Use line-range reads only for very large text files where a bounded excerpt is enough for the immediate reasoning step.
 - This tool reads only files, not directories. To inspect directories, use list_dir."""
 
 OPEN_PATH_PROMPT = """\
@@ -181,7 +190,8 @@ You can use it as a search tool with these optional filters: \
 - content_case_sensitive: set true when you need exact case matching for content_contains; \
 - content_max_bytes: optional max file size for content search (skip bigger files); \
 - min_size_bytes and max_size_bytes: filter by size. \
-Use follow_symlinks=true only when you want to recurse through symlinked directories."""
+Use follow_symlinks=true only when you want to recurse through symlinked directories. \
+Typical flow: use `list_dir` to discover or narrow candidates, then call `read_text_file` or `read_many_files` on the exact paths you selected."""
 
 RUN_COMMAND_PROMPT = """\
 Run a local shell command on this machine. Full unrestricted access to the operating system. \

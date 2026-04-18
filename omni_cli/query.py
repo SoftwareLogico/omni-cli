@@ -604,6 +604,16 @@ def _build_tool_result_summary(tool_result: Any) -> str:
         fpath = payload.get("path", "?")
         ftype = payload.get("type", "text")
         if ftype == "text":
+            if payload.get("partial") is True:
+                start_line = payload.get("start_line", "?")
+                end_line = payload.get("end_line", "?")
+                returned_lines = payload.get("returned_lines", "?")
+                total_lines = payload.get("total_lines", "?")
+                size = payload.get("size_bytes", "?")
+                return (
+                    f"inspected {fpath} lines {start_line}-{end_line} "
+                    f"({returned_lines} returned, file has {total_lines} lines, {size} bytes)"
+                )
             lines = payload.get("total_lines", "?")
             size = payload.get("size_bytes", "?")
             return f"read {fpath} ({lines} lines, {size} bytes) -> added to SoT"
