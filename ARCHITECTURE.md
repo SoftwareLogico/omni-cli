@@ -172,6 +172,7 @@ Implements the JIT (Just-In-Time) agent pattern.
 - To support delegated child agents, the runtime honors the `OMNI_SESSIONS_DIR` environment variable: when set, the runtime points its `SessionStore` to that directory so sub-agents can run inside a parent's `sessions/` folder.
 - The runtime caches provider adapters and performs capability detection when needed; this drives tool availability and SoT composition per-provider.
 - The streaming provider adapter emits incremental text, tool-call, reasoning/thinking, and usage events when the provider returns them, and the CLI renders them live instead of buffering the whole response first.
+- The host-environment context injected into orchestration rules includes explicit local/UTC date-time and weekday fields (including ISO weekday number) so date answers do not rely on model inference.
 
 Example `omni.toml` MCP entry:
 

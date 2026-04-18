@@ -68,10 +68,21 @@ def build_host_environment_prompt() -> str:
     try:
         local_now = datetime.now().astimezone()
         add_line("Current local date and time", local_now.isoformat(timespec="seconds"))
+        add_line("Current local date", local_now.date().isoformat())
+        add_line("Current local weekday", local_now.strftime("%A"))
+        add_line("Current local ISO weekday", str(local_now.isoweekday()))
         if _zoneinfo_utc_available():
-            add_line("Current UTC date and time", local_now.astimezone(ZoneInfo("UTC")).isoformat(timespec="seconds"))
+            utc_now = local_now.astimezone(ZoneInfo("UTC"))
+            add_line("Current UTC date and time", utc_now.isoformat(timespec="seconds"))
+            add_line("Current UTC date", utc_now.date().isoformat())
+            add_line("Current UTC weekday", utc_now.strftime("%A"))
+            add_line("Current UTC ISO weekday", str(utc_now.isoweekday()))
         else:
-            add_line("Current UTC date and time", datetime.utcnow().isoformat(timespec="seconds"))
+            utc_now = datetime.utcnow()
+            add_line("Current UTC date and time", utc_now.isoformat(timespec="seconds"))
+            add_line("Current UTC date", utc_now.date().isoformat())
+            add_line("Current UTC weekday", utc_now.strftime("%A"))
+            add_line("Current UTC ISO weekday", str(utc_now.isoweekday()))
         try:
             tzname = local_now.tzinfo.tzname(local_now) if local_now.tzinfo else None
             if tzname:
