@@ -45,6 +45,7 @@ class ToolConfig:
     output_limit: int = 12000
     default_command_timeout_seconds: int = 120
     binary_check_size: int = 8192
+    show_thinking: bool = True
 
 
 @dataclass
@@ -201,6 +202,7 @@ def _parse_app_config(raw: dict[str, Any], keys_raw: dict[str, Any] | None = Non
                 "tools.default_command_timeout_seconds",
             ),
             binary_check_size=_parse_positive_int(tools_raw.get("binary_check_size", 8192), "tools.binary_check_size"),
+            show_thinking=_parse_bool(tools_raw.get("show_thinking", True), "tools.show_thinking"),
         ),
         mcp_servers=mcp_servers,
         providers=providers,
@@ -254,3 +256,9 @@ def _parse_non_negative_int(value: Any, field_name: str) -> int:
     if normalized < 0:
         raise ConfigError(f"{field_name} must be a non-negative integer")
     return normalized
+
+
+def _parse_bool(value: Any, field_name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    raise ConfigError(f"{field_name} must be a boolean")

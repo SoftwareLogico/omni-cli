@@ -12,6 +12,7 @@ primary_provider = "lmstudio"
 output_limit = 12000
 default_command_timeout_seconds = 120
 binary_check_size = 8192
+show_thinking = true
 
 [providers.lmstudio]
 base_url = "http://192.168.1.XXX:1234/v1"

@@ -398,10 +398,14 @@ def _extract_reasoning_payload(delta: dict[str, Any]) -> tuple[str, list[dict[st
             if detail_text:
                 reasoning_parts.append(detail_text)
 
-    for key in ("reasoning_content", "reasoning", "thinking"):
-        value = delta.get(key)
-        if isinstance(value, str) and value:
-            reasoning_parts.append(value)
+    # Some providers emit equivalent reasoning in both `reasoning_details`
+    # and legacy string fields. Prefer details when present to avoid
+    # duplicate visible thinking output.
+    if not reasoning_parts:
+        for key in ("reasoning_content", "reasoning", "thinking"):
+            value = delta.get(key)
+            if isinstance(value, str) and value:
+                reasoning_parts.append(value)
 
     return "".join(reasoning_parts), reasoning_details
 

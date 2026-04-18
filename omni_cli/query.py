@@ -62,7 +62,26 @@ class StreamRenderState:
     text_started: bool = False
 
 
-async def run_single_turn(adapter: ProviderAdapter, request: ProviderRequest, console: Console) -> TurnResult:
+def _strip_reasoning_overlap(existing_text: str, incoming_text: str) -> str:
+    if not incoming_text:
+        return ""
+
+    if not existing_text:
+        return incoming_text
+
+    max_overlap = min(len(existing_text), len(incoming_text))
+    for overlap in range(max_overlap, 0, -1):
+        if existing_text.endswith(incoming_text[:overlap]):
+            return incoming_text[overlap:]
+    return incoming_text
+
+
+async def run_single_turn(
+    adapter: ProviderAdapter,
+    request: ProviderRequest,
+    console: Console,
+    show_thinking: bool = True,
+) -> TurnResult:
     result = TurnResult()
     render_state = StreamRenderState()
 
@@ -71,11 +90,14 @@ async def run_single_turn(adapter: ProviderAdapter, request: ProviderRequest, co
             text = str(event.payload.get("text", ""))
             details = event.payload.get("details") or []
             if text:
-                result.reasoning += text
-                if not render_state.reasoning_started:
-                    console.print("thinking:", style="dim", end=" ")
-                    render_state.reasoning_started = True
-                console.print(text, style="dim", markup=False, end="")
+                deduped_text = _strip_reasoning_overlap(result.reasoning, text)
+                if deduped_text:
+                    result.reasoning += deduped_text
+                    if show_thinking:
+                        if not render_state.reasoning_started:
+                            console.print("thinking:", style="dim", end=" ")
+                            render_state.reasoning_started = True
+                        console.print(deduped_text, style="dim", markup=False, end="")
             if isinstance(details, list):
                 for detail in details:
                     if isinstance(detail, dict):
@@ -84,7 +106,7 @@ async def run_single_turn(adapter: ProviderAdapter, request: ProviderRequest, co
             text = str(event.payload.get("text", ""))
             result.text += text
             if text:
-                if render_state.reasoning_started and not render_state.text_started:
+                if show_thinking and render_state.reasoning_started and not render_state.text_started:
                     console.out("\n\n")
                 render_state.text_started = True
                 console.out(text, end="")
@@ -99,7 +121,7 @@ async def run_single_turn(adapter: ProviderAdapter, request: ProviderRequest, co
         elif event.type == "error":
             raise RuntimeError(str(event.payload.get("message", "Unknown provider error")))
 
-    if result.text or render_state.reasoning_started:
+    if result.text or (show_thinking and render_state.reasoning_started):
         console.out("\n")
 
     return result
@@ -143,7 +165,12 @@ async def run_tool_loop(
             tools=[],
             conversation_messages=_build_payload_messages(conversation_state, request),
         )
-        turn_result = await run_single_turn(adapter, plain_request, console)
+        turn_result = await run_single_turn(
+            adapter,
+            plain_request,
+            console,
+            show_thinking=runtime.config.tools.show_thinking,
+        )
         # SoT Step 6: Clean — save assistant response to permanent history
         assistant_message = {"role": "assistant", "content": turn_result.text}
         if turn_result.reasoning_details:
@@ -197,7 +224,12 @@ async def run_tool_loop(
 
         # ── SoT Step 5: Inference ──
         if round_request.stream:
-            completion = await _run_streaming_round(adapter, round_request, console)
+            completion = await _run_streaming_round(
+                adapter,
+                round_request,
+                console,
+                show_thinking=runtime.config.tools.show_thinking,
+            )
         else:
             completion = await adapter.complete_turn(round_request)
 
@@ -771,7 +803,12 @@ def _build_tool_result_summary(tool_result: Any) -> str:
 
 # ── Streaming ─────────────────────────────────────────────────────────────
 
-async def _run_streaming_round(adapter: ProviderAdapter, request: ProviderRequest, console: Console):
+async def _run_streaming_round(
+    adapter: ProviderAdapter,
+    request: ProviderRequest,
+    console: Console,
+    show_thinking: bool = True,
+):
     text_parts: list[str] = []
     reasoning_parts: list[str] = []
     reasoning_details: list[dict[str, Any]] = []
@@ -784,11 +821,15 @@ async def _run_streaming_round(adapter: ProviderAdapter, request: ProviderReques
             text = str(event.payload.get("text", ""))
             details = event.payload.get("details") or []
             if text:
-                reasoning_parts.append(text)
-                if not render_state.reasoning_started:
-                    console.print("thinking:", style="dim", end=" ")
-                    render_state.reasoning_started = True
-                console.print(text, style="dim", markup=False, end="")
+                current_reasoning = "".join(reasoning_parts)
+                deduped_text = _strip_reasoning_overlap(current_reasoning, text)
+                if deduped_text:
+                    reasoning_parts.append(deduped_text)
+                    if show_thinking:
+                        if not render_state.reasoning_started:
+                            console.print("thinking:", style="dim", end=" ")
+                            render_state.reasoning_started = True
+                        console.print(deduped_text, style="dim", markup=False, end="")
             if isinstance(details, list):
                 for detail in details:
                     if isinstance(detail, dict):
@@ -796,7 +837,7 @@ async def _run_streaming_round(adapter: ProviderAdapter, request: ProviderReques
         elif event.type == "text_delta":
             text = str(event.payload.get("text", ""))
             if text:
-                if render_state.reasoning_started and not render_state.text_started:
+                if show_thinking and render_state.reasoning_started and not render_state.text_started:
                     console.out("\n\n")
                 render_state.text_started = True
                 text_parts.append(text)
@@ -813,7 +854,7 @@ async def _run_streaming_round(adapter: ProviderAdapter, request: ProviderReques
 
     text = "".join(text_parts)
     tool_calls = [_finalize_tool_call(tool_state[index]) for index in sorted(tool_state)]
-    if text or render_state.reasoning_started:
+    if text or (show_thinking and render_state.reasoning_started):
         console.out("\n")
 
     assistant_message: dict[str, Any] = {"role": "assistant"}

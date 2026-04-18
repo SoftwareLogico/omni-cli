@@ -108,6 +108,7 @@ No parameters. Returns delegated tasks and status (RUNNING/COMPLETED). Prefer `w
 - Global CLI flag `--config <path>` can be passed before commands to use a specific TOML config.
 - Delegated agents inherit runtime context and session storage rules (including `OMNI_SESSIONS_DIR` when set).
 - Boss/Worker prompt separation is enforced by the runtime (`AGENT_SYSTEM_PROMPT` vs `SUB_AGENT_SYSTEM_PROMPT`).
+- Thinking visibility is controlled from TOML under `[tools]` via `show_thinking` (default `true`). This is a persistent config setting, not a CLI parameter.
 
 ## File Discovery Tool (`list_dir`)
 
