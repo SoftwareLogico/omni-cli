@@ -91,9 +91,23 @@
    omni-cli --provider [ollama/lmstudio/openrouter]
    #e.g: omni-cli --provider ollama
 
-   #using venv
-   source venv/bin/activate
-   ./.venv/bin/omni-cli --provider openrouter
+   # using a virtual environment (optional but recommended)
+
+   #uv
+   uv venv <env_name> --python 3.xx
+   source <env_name>/bin/activate
+   uv run --active omni-cli --provider openrouter
+
+   #conda
+   conda create -n <env_name> python=3.xx
+   conda activate <env_name>
+   omni-cli --provider openrouter
+
+   #venv
+   python3 -m venv <env_name>
+   source <env_name>/bin/activate
+   pip install -e .
+   omni-cli --provider openrouter
 
    # Resume a previous session
 
