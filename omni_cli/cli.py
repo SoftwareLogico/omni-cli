@@ -493,7 +493,8 @@ async def _run_command_turn(
         usage_table = Table(title="Turn Summary & Usage")
         usage_table.add_column("Metric")
         usage_table.add_column("Value", justify="right")
-        
+        usage_table.add_row("Session ID", session_id)
+
         main_tokens = result.usage.get("total_tokens", 0) - result.usage.get("delegated_total_tokens", 0)
         total_tokens = result.usage.get("total_tokens", 0)
         latest_prompt_tokens = result.usage.get("latest_prompt_tokens")

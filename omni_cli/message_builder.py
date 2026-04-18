@@ -1,6 +1,13 @@
 from __future__ import annotations
 
 import mimetypes
+import os
+import platform
+import socket
+import getpass
+import sys
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +26,83 @@ def build_orchestration_rules(is_sub_agent: bool = False) -> str:
     else:
         parts.append(AGENT_SYSTEM_PROMPT.strip())
     parts.append(RUNTIME_RULES.strip())
+    # Append host environment block (best-effort) so payloads always include it
+    host_context = build_host_environment_prompt()
+    if host_context:
+        parts.append(host_context)
     return "\n\n".join(parts)
+
+
+def build_host_environment_prompt() -> str:
+    """Build a compact host environment block (best-effort)."""
+    def _safe_call(func, *a, **kw):
+        try:
+            return func(*a, **kw)
+        except Exception:
+            return None
+
+    def _zoneinfo_utc_available() -> bool:
+        try:
+            ZoneInfo("UTC")
+            return True
+        except Exception:
+            return False
+
+    lines: list[str] = [
+        "HOST ENVIRONMENT (best-effort; may be partial if some fields are unavailable)",
+        "Use this information as practical operating context for paths, shell commands, and environment-sensitive decisions.",
+    ]
+
+    def add_line(label: str, value: str | None) -> None:
+        if value:
+            cleaned = str(value).strip()
+            if cleaned:
+                lines.append(f"- {label}: {cleaned}")
+
+    add_line("Operating system", _normalize_os_name(_safe_call(platform.system)))
+    add_line("OS release", _safe_call(platform.release))
+    add_line("OS version", _safe_call(platform.version))
+    add_line("Architecture", _safe_call(platform.machine))
+    add_line("Hostname", _safe_call(socket.gethostname))
+
+    try:
+        local_now = datetime.now().astimezone()
+        add_line("Current local date and time", local_now.isoformat(timespec="seconds"))
+        if _zoneinfo_utc_available():
+            add_line("Current UTC date and time", local_now.astimezone(ZoneInfo("UTC")).isoformat(timespec="seconds"))
+        else:
+            add_line("Current UTC date and time", datetime.utcnow().isoformat(timespec="seconds"))
+        try:
+            tzname = local_now.tzinfo.tzname(local_now) if local_now.tzinfo else None
+            if tzname:
+                add_line("Timezone", tzname)
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    add_line("Username", _safe_call(getpass.getuser) or os.environ.get("USER") or os.environ.get("USERNAME"))
+    add_line("User home directory", _safe_call(lambda: str(Path.home())))
+    add_line("Current working directory", _safe_call(os.getcwd))
+    add_line("Default shell", os.environ.get("SHELL"))
+    add_line("Terminal", os.environ.get("TERM_PROGRAM") or os.environ.get("TERM"))
+    add_line("Locale", os.environ.get("LANG"))
+    add_line("Python executable", _safe_call(lambda: os.path.realpath(sys.executable)))
+
+    return "\n".join(lines).strip()
+
+
+def _normalize_os_name(system_name: str | None) -> str | None:
+    if not system_name:
+        return None
+    lowered = system_name.strip().lower()
+    if lowered == "darwin":
+        return "macOS"
+    if lowered == "windows":
+        return "Windows"
+    if lowered == "linux":
+        return "Linux"
+    return system_name.strip()
 
     
 def build_user_turn_message(user_prompt: str, source_index: str, source_contents: str = "") -> str:
