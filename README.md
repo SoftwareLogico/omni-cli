@@ -96,7 +96,7 @@
    #uv
    uv venv <env_name> --python 3.xx
    source <env_name>/bin/activate
-   uv run --active omni-cli --provider openrouter
+   uv run omni-cli --provider openrouter
 
    #conda
    conda create -n <env_name> python=3.xx
