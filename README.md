@@ -117,8 +117,8 @@
 ## Platform Compatibility
 
 - ✅ **macOS**: Fully tested and compatible.
-- ⏳ **Windows**: Pending testing.
-- ⏳ **Linux**: Pending testing.
+- ✅ **Windows**: Fully tested and compatible.
+- ✅ **Linux**: Fully tested and compatible.
 
 ## 🧠 The Core Concept: The SoT Method
 
@@ -131,6 +131,15 @@ Most AI coding agents fail because they append every file read and every code ch
 
 **Result:** The model always sees the absolute latest state of your project. Context grows linearly, not exponentially.
 👉 [Read the full SoT Method explanation here.](SoT_Method.md)
+
+## 🧪 Benchmarks
+
+Optional benchmark suite for post-launch validation.
+
+- ✅ [agent_test.md](agent_test.md): Safe end-to-end benchmark. It validates background worker orchestration, file download and verification, local file create/edit flow, native OS command execution, fallback/retry behavior, and final cleanup/reporting.
+- ⚠️ [seppuku_test.md](seppuku_test.md): Intentionally destructive lab benchmark used to demonstrate raw model power without babysitting or guardrails.
+
+⚠️WARNING: [seppuku_test.md](seppuku_test.md) is for isolated lab VM use only .⚠️
 
 ## 💸 Token Economy: Scripts > Tool Ping-Pong
 
