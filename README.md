@@ -64,7 +64,7 @@
    ```toml
    [providers.openrouter]
    base_url = "https://openrouter.ai/api/v1"
-   model = "z-ai/glm-5.1"
+   model = "google/gemma-4-31b-it"
    temperature = 0.7
    max_output_tokens = 8192
 
