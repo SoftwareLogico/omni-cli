@@ -324,14 +324,14 @@ Usage:
 - Existing binary files can be overwritten with text, but edit_file is only for decodable text files."""
 
 DELETE_FILE_PROMPT = """\
-Delete a file or directory from the local filesystem.
+Delete a file or directory from disk permanently.
 
 Usage:
 - The path may be absolute or project-relative.
-- The path is removed immediately.
+- The file or directory is deleted from the filesystem immediately and cannot be undone.
 - Files, symlinks and directories are supported.
 - Directories require recursive=true unless they are symlinks.
-- This tool changes the filesystem immediately."""
+- If deletion fails (e.g., permissions, locked files, special paths), fall back to run_command with the appropriate shell command (rm, rmdir, etc.)."""
 
 GET_SESSION_STATE_PROMPT = """\
 Inspect the current session state.
@@ -357,10 +357,10 @@ Supported changes:
 Use this to change the active runtime for future turns in the current session. If provider changes and model is omitted, the provider's configured default model is used."""
 
 DETACH_PATH_PROMPT = """\
-Remove one or more files or directories from the session Source of Truth (SoT).
+Stop tracking one or more files or directories in the session Source of Truth (SoT). The files remain on disk — this only removes them from your tracked context to free tokens.
 
 Use path for a single target or paths for batch removal. Prefer a single batch call when removing multiple paths.
-CRITICAL: You can use this tool to remove ANY file currently visible in your '=== SOURCE OF TRUTH ===' block, regardless of whether it was permanently attached or just read via read_text_file."""
+You can untrack ANY file currently visible in your '=== SOURCE OF TRUTH ===' block, regardless of whether it was permanently attached or just read via read_text_file."""
 
 ATTACH_PATH_PROMPT = """\
 Attach one or more files or directories to the session Source of Truth (SoT) so future turns can reference them. \
