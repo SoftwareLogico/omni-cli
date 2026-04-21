@@ -18,6 +18,11 @@ from rich.table import Table
 
 from typing import Any
 
+import os
+import platform
+import socket
+import getpass
+
 from omni_cli.prompting import prepare_turn_request
 from omni_cli.query import ConversationState, run_tool_loop
 from omni_cli.runtime import AppRuntime, bootstrap_runtime
@@ -25,6 +30,7 @@ from omni_cli.sot import is_sot_block_content, is_orchestration_rules_content, l
 from omni_cli.source_of_truth import build_source_bundle, SourceBundle
 from omni_cli.providers.base import ProviderCapability
 from omni_cli.session_store import SessionRecord
+from omni_cli.message_builder import _detect_active_shell, _normalize_os_name
 
 
 console = Console()
@@ -111,8 +117,10 @@ def _format_capability_line(cap: ProviderCapability) -> tuple[str, str]:
     stats: list[str] = []
     
     if cap.allocated_context_length or cap.context_length:
-        if cap.allocated_context_length:
-            val = f"{_format_token_count(cap.allocated_context_length)}/{_format_token_count(cap.context_length)}"
+        if cap.allocated_context_length and cap.context_length and cap.allocated_context_length != cap.context_length:
+            val = f"{_format_token_count(cap.allocated_context_length)} alloc / {_format_token_count(cap.context_length)} max"
+        elif cap.allocated_context_length:
+            val = f"{_format_token_count(cap.allocated_context_length)}"
         else:
             val = f"{_format_token_count(cap.context_length)}"
         stats.append(f"ctx={val}")
@@ -670,16 +678,66 @@ async def _run_prompt(
 
     start_now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # Constructing the header lines
-    line1 = f"session={record.id} | provider={active_provider} | model={active_model}"
-    line2 = f"started={start_now_str} | {stats_line}"
-    line3 = f"{caps_line} | tools={'off' if no_tools else 'on'}"
-    
+    # ── Build the startup banner ──
+    logo = (
+        "[bold cyan]"
+        "  ___  __  __ _   _ ___      ____ _     ___ \n"
+        " / _ \\|  \\/  | \\ | |_ _|    / ___| |   |_ _|\n"
+        "| | | | |\\/| |  \\| || |____| |   | |    | | \n"
+        "| |_| | |  | | |\\  || |____| |___| |___ | | \n"
+        " \\___/|_|  |_|_| \\_|___|    \\____|_____|___|\n"
+        "[/bold cyan]"
+    )
+
+    # Session & model info
+    line_session = f"[bold white]session[/bold white]  {record.id}"
+    line_model = f"[bold white]model[/bold white]    {active_model} [dim]via {active_provider}[/dim]"
+    line_time = f"[bold white]started[/bold white]  {start_now_str}"
+    line_stats = f"[bold white]specs[/bold white]    {stats_line}" if stats_line else ""
+    line_caps = f"[bold white]caps[/bold white]     {caps_line} | tools={'off' if no_tools else 'on'}" if caps_line else f"[bold white]tools[/bold white]    {'off' if no_tools else 'on'}"
+
+    # Host environment info
+    os_name = _normalize_os_name(platform.system()) or "Unknown"
+    os_release = platform.release() or ""
+    arch = platform.machine() or ""
+    hostname = ""
+    try:
+        hostname = socket.gethostname()
+    except Exception:
+        pass
+    username = ""
+    try:
+        username = getpass.getuser()
+    except Exception:
+        username = os.environ.get("USER") or os.environ.get("USERNAME") or ""
+    shell = _detect_active_shell() or "unknown"
+    cwd = ""
+    try:
+        cwd = os.getcwd()
+    except Exception:
+        pass
+
+    host_parts = [f"{os_name} {os_release}".strip(), arch]
+    if hostname:
+        host_parts.append(hostname)
+    if username:
+        host_parts.append(f"user={username}")
+    line_host = f"[bold white]host[/bold white]     {' | '.join(p for p in host_parts if p)}"
+    line_shell = f"[bold white]shell[/bold white]    {shell}"
+    line_cwd = f"[bold white]cwd[/bold white]      {cwd}" if cwd else ""
+
+    # Assemble banner
+    banner_lines = [logo, ""]
+    for line in [line_session, line_model, line_time, line_stats, line_caps, "", line_host, line_shell, line_cwd]:
+        if line or line == "":
+            banner_lines.append(line)
+    banner_lines.append("")
+    banner_lines.append(f"[dim]{_submit_shortcut_help_text()} Press Ctrl+C on an empty prompt to leave.[/dim]")
+
     console.print(
         Panel.fit(
-            f"{line1}\n{line2}\n{line3}\n"
-            f"{_submit_shortcut_help_text()} Press Ctrl+C on an empty prompt to leave.",
-            title="omni-cli",
+            "\n".join(banner_lines),
+            border_style="cyan",
         )
     )
 
