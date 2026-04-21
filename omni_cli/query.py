@@ -653,20 +653,20 @@ def _build_tool_result_summary(tool_result: Any) -> str:
         op = payload.get("operation", "update")
         replaced = payload.get("occurrences_replaced", "?")
         size = payload.get("size_bytes", "?")
-        return f"{op} {fpath} (replaced {replaced}, now {size} bytes) -> SoT refreshed"
+        return f"{op} {fpath} (replaced {replaced}, now {size} bytes). SoT already has the updated version — do not re-read."
 
     if name == "apply_text_edits":
         fpath = payload.get("path", "?")
         edit_count = payload.get("edit_count", "?")
         size = payload.get("size_bytes", "?")
-        return f"updated {fpath} ({edit_count} atomic edits, now {size} bytes) -> SoT refreshed"
+        return f"updated {fpath} ({edit_count} atomic edits, now {size} bytes). SoT already has the updated version — do not re-read."
 
     if name == "write_file":
         fpath = payload.get("path", "?")
         op = payload.get("operation", "write")
         lines = payload.get("line_count", "?")
         size = payload.get("size_bytes", "?")
-        return f"{op} {fpath} ({lines} lines, {size} bytes) -> SoT refreshed"
+        return f"{op} {fpath} ({lines} lines, {size} bytes). SoT already has the updated version — do not re-read."
 
     if name == "list_dir":
         fpath = payload.get("path", "?")
@@ -689,6 +689,38 @@ def _build_tool_result_summary(tool_result: Any) -> str:
             summary_lines.append(f"... and {count - 20} more entries.")
 
         return "\n".join(summary_lines)
+
+    if name == "search_code":
+        mode = payload.get("mode", "files_with_matches")
+        if mode == "content":
+            content = payload.get("content", "")
+            line_count = payload.get("line_count", 0)
+            total = payload.get("total_result_lines", line_count)
+            truncated = payload.get("truncated", False)
+            if not content:
+                return "search: no matches found"
+            result = content
+            if truncated:
+                result += f"\n\n[showing {line_count} of {total} result lines — use offset to paginate]"
+            return result
+        elif mode == "count":
+            match_count = payload.get("match_count", 0)
+            file_count = payload.get("file_count", 0)
+            content = payload.get("content", "")
+            if not content:
+                return "search: no matches found"
+            return f"{content}\n\n{match_count} matches across {file_count} files"
+        else:
+            files = payload.get("files", [])
+            if not files:
+                return "search: no files matched"
+            file_count = payload.get("file_count", len(files))
+            total = payload.get("total_matches", file_count)
+            truncated = payload.get("truncated", False)
+            result = f"found {file_count} files:\n" + "\n".join(files)
+            if truncated:
+                result += f"\n\n[showing {file_count} of {total} — use offset to paginate]"
+            return result
 
     if name == "run_command":
         cmd = payload.get("command", "?")

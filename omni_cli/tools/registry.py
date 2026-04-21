@@ -15,6 +15,7 @@ from omni_cli.tools.editor.write import execute_write_file
 from omni_cli.tools.fs.delete import execute_delete_file
 from omni_cli.tools.fs.list_dir import execute_list_dir
 from omni_cli.tools.reader.main import execute_read_many_files, execute_read_text_file
+from omni_cli.tools.search.search_code import execute_search_code
 from omni_cli.tools.session.control import (
     execute_attach_path,
     execute_detach_path,
@@ -84,6 +85,7 @@ class ToolRegistry:
             "list_dir": self._list_dir,
             "read_text_file": self._read_text_file,
             "read_many_files": self._read_many_files,
+            "search_code": self._search_code,
             "open_path": self._open_path,
             "run_command": self._run_command,
             "list_commands": self._list_commands,
@@ -191,6 +193,9 @@ class ToolRegistry:
             supports_video=self.capability.supports_video,
             file_unchanged_stub=FILE_UNCHANGED_STUB,
         )
+
+    def _search_code(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return execute_search_code(arguments, self.runtime.paths.root_dir)
 
     def _run_command(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return execute_run_command(

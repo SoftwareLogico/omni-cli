@@ -21,7 +21,7 @@
 - **📊 SoT Method**: Fresh files from disk every turn. No token bloat, always up-to-date.
 - **🤖 Async Multi-Agent**: Delegate trial-and-error to cheap sub-agents (empty ctx).
 - **⚡ Batch Orchestration**: Multi-tools + bash/Python scripts in ONE turn.
-- **🔧 Full Tools**: 25+ incl. unrestricted shell, precise edits, MCP extensible.
+- **🔧 Full Tools**: 21+ incl. unrestricted shell, regex code search, precise edits, MCP extensible.
 - **🌐 Multi-Provider**: Switch Ollama/LMStudio/OpenRouter live.
 - **💰 Native Prompt Caching**: Payload architecture designed for prefix-matching, saving up to 50% API costs on long histories by caching static dialogue and keeping dynamic files at the bottom.
 
@@ -149,10 +149,9 @@ Optional benchmark suite for post-launch validation.
 
 We hate "Tool Ping-Pong" (when an AI calls `list_dir`, waits, calls `read_file`, waits, calls `grep`, waits). It burns hundreds of thousands of context tokens.
 
-`omni-cli` is designed to batch operations. The system prompts force the model to use `run_command` to write bash one-liners or Python mini-scripts to execute complex conditional logic in a single turn.
+`omni-cli` is designed to batch operations. The system prompts drive the model to use `run_command` for bash one-liners or Python mini-scripts, `list_dir` for powerful filtered discovery (by name, extension, size, content), and `search_code` for regex pattern matching with line numbers across source files — all in a single turn.
 
-Why use 5 sequential tool calls when the model can just run:
-`run_command("for f in $(find . -name '*.py'); do grep -H 'TODO' $f; done")`?
+Why use 5 sequential tool calls when the model can batch `list_dir` + `search_code` + `read_many_files` in one response?
 
 ## 🛑 The Anti-Hype FAQ
 
@@ -185,7 +184,7 @@ If you are coming from other trendy AI coding tools, you might be looking for fe
 `omni-cli` supports a Boss-Worker delegation model using Just-In-Time (JIT) sub-agents.
 
 If your main SoT is heavily loaded (expensive context), the main agent can use `delegate_task` to spawn a sub-agent in the background with a clean, empty context.
-The sub-agent does the dirty work (messy searches, trial-and-error shell scripts, compiling), logs everything silently to `agent.log`, and returns a clean report to the Boss via invisible IPC.
+The sub-agent does the dirty work (trial-and-error shell scripts, complex multi-step execution, compiling), logs everything silently to `agent.log`, and returns a clean report to the Boss via invisible IPC. For file discovery and code search, the Boss can use `list_dir` and `search_code` directly — cheaper than spawning a sub-agent.
 
 The Boss orchestrates. The Workers execute. Your terminal stays clean.
 

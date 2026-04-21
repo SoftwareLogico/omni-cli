@@ -140,12 +140,39 @@ Content search mode:
 
 When `content_contains` is used, matching entries include content match metadata and the tool returns aggregate content scan statistics (`searched_files`, `matched_files`, and skipped counters).
 
-Typical read flow:
+Typical discovery flow:
 
-- Use `list_dir` first when you need to discover or narrow down files.
+- `list_dir` is the primary discovery tool for any file type or use case. Use it first when you need to discover, filter, or narrow down files.
 - Once you know the exact path set, switch to `read_text_file` for one file or `read_many_files` for a batch.
 - Prefer full-file reads whenever practical so the Source of Truth receives the whole authoritative file snapshot.
-- Reserve line-range reads for very large UTF-8 text files or targeted follow-up inspection.
+- Use line-range reads (`start_line`/`end_line`) for targeted inspection of specific sections — for example, following up on a search result or examining a known function.
+
+## Code Search Tool (`search_code`)
+
+`search_code` is a regex-powered content search tool built on [ripgrep](https://github.com/BurntSushi/ripgrep). It complements `list_dir` for cases where you need matching lines with exact line numbers and surrounding context — particularly useful when working with source code.
+
+Supported parameters:
+
+- `pattern` (required): regex pattern to search for.
+- `path`: file or directory to search in. Defaults to project root.
+- `glob`: file pattern filter (e.g., `"*.py"`, `"*.{ts,tsx}"`).
+- `type`: language type filter (e.g., `"py"`, `"js"`, `"rust"`).
+- `output_mode`: `"files_with_matches"` (default, returns file paths), `"content"` (matching lines with context), `"count"` (match counts per file).
+- `context_before` / `context_after` / `context`: lines of surrounding context in content mode.
+- `show_line_numbers`: line numbers in content output (default `true`).
+- `case_insensitive`: case-insensitive matching (default `false`).
+- `multiline`: patterns spanning multiple lines (default `false`).
+- `head_limit`: max result entries (default `200`). Pass `0` for unlimited.
+- `offset`: skip first N results for pagination.
+
+When to use `list_dir` vs `search_code`:
+
+- **`list_dir`** is the general-purpose discovery tool. Use it for finding files by name, path, extension, size, timestamps, or broad content matching (`content_contains`). Works for any file type.
+- **`search_code`** is specialized for code exploration. Use it when you need regex matching with exact line numbers and surrounding context — finding definitions, usages, imports, or specific patterns across source files.
+
+Typical code exploration flow:
+
+- `search_code` to find where a symbol, function, or pattern is used → `read_text_file` with `start_line`/`end_line` to inspect the surrounding code → `edit_file` or `apply_text_edits` to make changes.
 
 ## File Reading Tools (`read_text_file`, `read_many_files`)
 
@@ -153,8 +180,8 @@ Typical read flow:
 
 Text file behavior:
 
-- Full reads are the default and are the preferred mode.
-- `start_line` and `end_line` are optional for UTF-8 text files and define a 1-indexed inclusive range.
+- Full reads are the default and preferred mode. They populate the SoT with the complete file.
+- `start_line` and `end_line` are available for any UTF-8 text file and define a 1-indexed inclusive range. Use them to inspect a known section, follow up on a search result, or examine a specific block without loading the entire file.
 - Partial line reads are inspection-only. They do not hydrate the full file into the SoT, which avoids replacing a full authoritative snapshot with a fragment.
 - If you want a file to be fully present in the SoT for subsequent reasoning, do a full read.
 
@@ -261,5 +288,6 @@ Change runtime parameters for future turns in the current session: `title`, `pro
 
 1. Resume/recovery currently depends on reconstructing `chat_history` and SoT state from persisted request/response artifacts.
 2. `edit_file` works by exact match. `apply_text_edits` adds line ranges, but neither is a regex engine nor an AST editor.
-3. `read_text_file` supports targeted line-range inspection for UTF-8 text files, but partial reads intentionally do not populate the SoT as full-file snapshots.
+3. `read_text_file` supports targeted line-range reads for any UTF-8 text file, but partial reads intentionally do not populate the SoT as full-file snapshots.
+4. `search_code` requires [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) to be installed and available in PATH.
 4. Archive files (`zip`, `tar`, `gz`, etc.) cannot be read directly. The model receives a format-specific error with the correct `run_command` invocation to list or extract contents.
