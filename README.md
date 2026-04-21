@@ -70,13 +70,13 @@
 
    [providers.lmstudio]
    base_url = "http://localhost:1234/v1"
-   model = "qwen/qwen3.6-35b"
+   model = "model_name" # or "" to let the adapter auto-resolve
    temperature = 0.5
    max_output_tokens = 32768
 
    [providers.ollama]
    base_url = "http://localhost:11434/v1"
-   model = "qwen3.5:9b"
+   model = "model_name" # or "" to let the adapter auto-resolve
    temperature = 0.5
    max_output_tokens = 8192
    ```

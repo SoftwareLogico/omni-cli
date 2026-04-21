@@ -73,11 +73,13 @@ class OpenAICompatibleAdapter:
             headers = {"Authorization": f"Bearer {self.api_key}", **self.extra_headers}
             async with httpx.AsyncClient(timeout=15.0) as client:
                 resp = await client.get(f"{self.base_url}/models", headers=headers)
+                if resp.status_code == 401:
+                    raise ValueError("Invalid API key for OpenRouter.")
                 if resp.status_code != 200:
-                    return
-                models = resp.json().get("data", [])
-        except Exception:
-            return
+                    raise RuntimeError(f"Failed to fetch models from OpenRouter (HTTP {resp.status_code}).")
+                models = resp.json().get("data",[])
+        except httpx.RequestError as exc:
+            raise RuntimeError(f"Could not connect to OpenRouter at {self.base_url}. Check your internet connection.") from exc
 
         model_info = None
         for m in models:
@@ -86,7 +88,7 @@ class OpenAICompatibleAdapter:
                 break
 
         if model_info is None:
-            return
+            raise ValueError(f"Model '{self.model}' not found in OpenRouter.")
 
         arch = model_info.get("architecture", {})
         input_mods = arch.get("input_modalities", [])
@@ -105,35 +107,51 @@ class OpenAICompatibleAdapter:
         )
 
     async def _detect_lmstudio_capabilities(self) -> None:
-        """LM Studio: GET /api/v1/models returns capabilities.vision and capabilities.trained_for_tool_use."""
-        # base_url may be http://host:1234/v1 — we need the origin (http://host:1234)
+        """LM Studio: Use native API to find loaded models and capabilities."""
         origin = _extract_origin(self.base_url)
         try:
             headers = {}
             if self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
             async with httpx.AsyncClient(timeout=10.0) as client:
-                # Try native API first
+                # Try native v1 API first (LM Studio 0.4.0+)
                 resp = await client.get(f"{origin}/api/v1/models", headers=headers)
                 if resp.status_code != 200:
-                    # Fall back to OpenAI-compat endpoint
+                    # Try native v0 API
+                    resp = await client.get(f"{origin}/api/v0/models", headers=headers)
+                if resp.status_code != 200:
+                    # Fallback to OpenAI compat
                     resp = await client.get(f"{origin}/v1/models", headers=headers)
                 if resp.status_code != 200:
-                    return
+                    raise RuntimeError(f"Failed to fetch models from LM Studio (HTTP {resp.status_code}).")
                 data = resp.json()
-        except Exception:
-            return
+        except httpx.RequestError as exc:
+            raise RuntimeError(f"Could not connect to LM Studio at {origin}. Is it running?") from exc
 
-        models_list = data.get("models", data.get("data", []))
+        models_list = data.get("models", data.get("data",[]))
+        if not models_list:
+            raise ValueError("No models found in LM Studio. Please download and load a model.")
+
         model_info = None
-        for m in models_list:
-            key = m.get("key", m.get("id", ""))
-            if key == self.model or self.model in key:
-                model_info = m
-                break
-
-        if model_info is None:
-            return
+        if not self.model:
+            # Look specifically for a LOADED model
+            for m in models_list:
+                if m.get("state") == "loaded" or m.get("loaded_instances"):
+                    model_info = m
+                    break
+            
+            if model_info is None:
+                raise ValueError("No model is currently loaded in LM Studio. Please load a model or specify one in omni.toml.")
+                
+            self.model = model_info.get("id", model_info.get("key", ""))
+        else:
+            for m in models_list:
+                key = m.get("key", m.get("id", ""))
+                if key == self.model or self.model in key:
+                    model_info = m
+                    break
+            if model_info is None:
+                raise ValueError(f"Model '{self.model}' not found in LM Studio.")
 
         caps = model_info.get("capabilities", {})
         quant = model_info.get("quantization", {}) or {}
@@ -149,39 +167,43 @@ class OpenAICompatibleAdapter:
         )
 
     async def _detect_ollama_capabilities(self) -> None:
-        """Ollama: POST /api/show — purely structural detection, no model name matching.
-
-        Vision:  'clip' in details.families (classic multimodal, e.g. llava)
-                 OR any key with '.vision.' in model_info (newer built-in vision, e.g. qwen3.5)
-        Tools:   template contains '{{ if .Tools }}' — Ollama sets this for tool-capable models.
-        Context: any model_info key ending in '.context_length'.
-        """
+        """Ollama: Use /api/ps to find the currently running model."""
         origin = _extract_origin(self.base_url)
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
+                if not self.model:
+                    # Query /api/ps to get ONLY the models currently loaded in RAM/VRAM
+                    resp_ps = await client.get(f"{origin}/api/ps")
+                    if resp_ps.status_code == 200:
+                        running = resp_ps.json().get("models",[])
+                        if running:
+                            self.model = running[0].get("name", "")
+                    
+                    if not self.model:
+                        raise ValueError("No model is currently running in Ollama. Please run a model first or specify one in omni.toml.")
+
                 resp = await client.post(
                     f"{origin}/api/show",
                     json={"model": self.model},
                 )
+                if resp.status_code == 404:
+                    raise ValueError(f"Model '{self.model}' not found in Ollama. Did you pull it?")
                 if resp.status_code != 200:
-                    return
+                    raise RuntimeError(f"Failed to fetch model info from Ollama (HTTP {resp.status_code}).")
                 data = resp.json()
-        except Exception:
-            return
+        except httpx.RequestError as exc:
+            raise RuntimeError(f"Could not connect to Ollama at {origin}. Is the Ollama service running?") from exc
 
         details = data.get("details", {}) or {}
         model_info = data.get("model_info", {}) or {}
-        # capabilities is a list of strings e.g. ["completion", "vision", "tools", "thinking"]
-        capabilities: list[str] = data.get("capabilities") or []
+        capabilities: list[str] = data.get("capabilities") or[]
 
-        # Context length: any architecture key ending in .context_length
         context_length: int | None = None
         for key, val in model_info.items():
             if key.endswith(".context_length") and isinstance(val, int):
                 context_length = val
                 break
 
-        # Quantization and parameter size
         quantization = str(details.get("quantization_level", "")).strip()
         parameter_count = str(details.get("parameter_size", "")).strip()
 
@@ -198,7 +220,8 @@ class OpenAICompatibleAdapter:
 
     async def stream_turn(self, request: ProviderRequest):
         url = f"{self.base_url}/chat/completions"
-        payload = build_chat_completions_payload(request)
+        resolved_model = self.model or request.model
+        payload = build_chat_completions_payload(request, resolved_model)
         headers = {
             "Content-Type": "application/json",
             **self.extra_headers,
@@ -251,7 +274,8 @@ class OpenAICompatibleAdapter:
 
     async def complete_turn(self, request: ProviderRequest) -> ProviderCompletion:
         url = f"{self.base_url}/chat/completions"
-        payload = build_chat_completions_payload(request)
+        resolved_model = self.model or request.model
+        payload = build_chat_completions_payload(request, resolved_model)
         payload["stream"] = False
         headers = {
             "Content-Type": "application/json",
@@ -289,7 +313,7 @@ class OpenAICompatibleAdapter:
         )
 
 
-def build_chat_completions_payload(request: ProviderRequest) -> dict[str, Any]:
+def build_chat_completions_payload(request: ProviderRequest, resolved_model: str) -> dict[str, Any]:
     messages = request.conversation_messages or [
         {"role": "system", "content": request.system_prompt},
         {
@@ -303,7 +327,7 @@ def build_chat_completions_payload(request: ProviderRequest) -> dict[str, Any]:
     ]
 
     payload: dict[str, Any] = {
-        "model": request.model,
+        "model": resolved_model,
         "messages": messages,
         "temperature": request.temperature,
         "stream": request.stream,

@@ -24,11 +24,15 @@ def prepare_turn_request(
     session_model = session.model.strip() if isinstance(session.model, str) else ""
     if model_override and model_override.strip():
         model = model_override.strip()
+    elif selected_provider in {"lmstudio", "ollama"} and not provider.model.strip():
+        
+        model = ""
     elif selected_provider == session.provider and session_model:
         model = session_model
     else:
         model = provider.model
-    if not model:
+
+    if not model and selected_provider not in {"lmstudio", "ollama"}:
         raise ValueError(f"Provider has no model configured: {selected_provider}")
 
     temperature = session.temperature if session.temperature is not None else provider.temperature

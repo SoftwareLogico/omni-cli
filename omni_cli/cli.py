@@ -596,16 +596,22 @@ async def _run_prompt(
     if session_id:
         record = runtime.sessions.load(session_id)
         updated_provider = provider_name or record.provider
+        provider_config = runtime.config.provider(updated_provider)
+
         if model_override:
             updated_model = model_override
+        elif updated_provider in {"lmstudio", "ollama"} and not provider_config.model.strip():
+            updated_model = ""
         elif provider_name and provider_name != record.provider:
-            updated_model = runtime.config.provider(updated_provider).model
-            if not updated_model:
-                raise ValueError(
-                    f"Provider {updated_provider} has no default model configured. Pass --model explicitly."
-                )
+            updated_model = provider_config.model
+            if not updated_model and updated_provider not in {"lmstudio", "ollama"}:
+                raise ValueError(f"Provider {updated_provider} has no default model configured. Pass --model explicitly.")
         else:
-            updated_model = record.model
+            if updated_provider in {"lmstudio", "ollama"} and not provider_config.model.strip():
+                updated_model = ""
+            else:
+                updated_model = record.model
+
         if updated_provider != record.provider or updated_model != record.model:
             record = runtime.sessions.update_session(
                 session_id,
@@ -616,7 +622,7 @@ async def _run_prompt(
         provider = provider_name or runtime.config.runtime.primary_provider
         provider_config = runtime.config.provider(provider)
         model = model_override or provider_config.model
-        if not model:
+        if not model and provider not in {"lmstudio", "ollama"}:
             raise ValueError(f"Provider {provider} has no default model configured. Pass --model explicitly.")
         session_title = title or f"prompt {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         record = runtime.sessions.create_session(
@@ -633,6 +639,11 @@ async def _run_prompt(
     # Detect model capabilities before showing the banner
     adapter = await runtime.provider_adapter_async(active_provider, active_model)
     cap_line = _format_capability_line(adapter.capability)
+
+    
+    if not active_model and adapter.model:
+        active_model = adapter.model
+        record = runtime.sessions.update_session(record.id, model=active_model)
 
     console.print(
         Panel.fit(

@@ -16,7 +16,7 @@ show_thinking = true
 
 [providers.lmstudio]
 base_url = "http://192.168.1.XXX:1234/v1"
-model = "qwen/qwen3.6-35b-a3b"
+model = "" #empty means it'll use the loaded one
 temperature = 0.2
 max_output_tokens = 32768
 
@@ -30,7 +30,7 @@ app_title = ""
 
 [providers.ollama]
 base_url = "http://192.168.1.XXX:11434/v1"
-model = "qwen3.5:9b"
+model = "" #empty means it'll use the loaded one
 temperature = 0.2
 max_output_tokens = 32768
 
