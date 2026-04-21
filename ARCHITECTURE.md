@@ -288,7 +288,7 @@ Change runtime parameters for future turns in the current session: `title`, `pro
 ## Known current limitations
 
 1. Resume/recovery currently depends on reconstructing `chat_history` and SoT state from persisted request/response artifacts.
-2. `edit_file` works by exact match. `apply_text_edits` adds line ranges, but neither is a regex engine nor an AST editor.
+2. `edit_file` makes a single exact-match replacement per call. `apply_text_edits` batches multiple edits (text matching or line ranges) atomically in one call. Neither is a regex engine nor an AST editor.
 3. `read_text_file` supports targeted line-range reads for any UTF-8 text file, but partial reads intentionally do not populate the SoT as full-file snapshots.
 4. `search_code` requires [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) to be installed and available in PATH.
 4. Archive files (`zip`, `tar`, `gz`, etc.) cannot be read directly. The model receives a format-specific error with the correct `run_command` invocation to list or extract contents.

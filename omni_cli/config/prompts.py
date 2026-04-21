@@ -117,8 +117,7 @@ EXPLORATION & DISCOVERY
 TOOL STRATEGY & CREATIVITY
 - You have full unrestricted access to the OS via tools. Be creative. If a specialized tool fails, fall back to `run_command` — but always use the correct syntax for the active shell shown in HOST ENVIRONMENT (e.g., PowerShell vs bash vs CMD have different syntax).
 - Prefer full-file reads whenever practical so the SoT contains the whole authoritative file. Use `start_line`/`end_line` for targeted follow-up inspection of known sections.
-- For one focused exact replacement in an existing file, prefer edit_file.
-- For a larger single-file refactor, repeated edits, or exact line numbers, prefer apply_text_edits.
+- For a single replacement in a file, use edit_file. For multiple changes to the same file, use apply_text_edits — it batches them in one call and supports both text matching and line ranges.
 - After delegate_task returns, explicitly decide whether to call read_text_file, read_many_files, or attach_path_to_source from the main session.
 - For long-running jobs, start them with run_command using background=true.
 - Do not keep retrying near-identical failing commands repeatedly. Change your strategy."""
@@ -288,30 +287,28 @@ Usage:
 - Use this for stuck servers, failed watchers, runaway builds, or any background command that should be stopped cleanly."""
 
 EDIT_FILE_PROMPT = """\
-Edit an existing file by replacing an exact block of text with a new block.
+Edit an existing file by replacing an exact block of text with a new block. One replacement per call.
 
 Usage:
 - The path may be absolute or project-relative.
-- Prefer this tool for targeted edits to existing files.
 - The tool first tries an exact match for old_string. If that fails, it will retry with quote normalization so edits still work when the file contains curly quotes.
 - old_string should be long enough to be unique. If multiple matches exist and replace_all is false, the tool will fail and ask for more context.
 - Use replace_all=true only when you intentionally want to change every occurrence.
 - If the file does not exist and old_string is empty, the tool will create it with new_string.
 - For non-Markdown files, trailing whitespace in new_string is normalized line-by-line before writing.
-- If old_string and new_string are identical, the tool fails because there is nothing to change."""
+- If old_string and new_string are identical, the tool fails because there is nothing to change.
+- If you need to make multiple changes to the same file, use apply_text_edits instead — it batches them in one call."""
 
 APPLY_TEXT_EDITS_PROMPT = """\
-Apply multiple atomic edits to an existing text file in a single tool call.
+Apply multiple edits to an existing text file in a single atomic call. Supports both text matching and line-range targeting.
 
 Usage:
-- Provide path and an edits array.
-- Each edit must target either exact text with old_string or an exact line range with start_line/end_line.
-- Text-targeted edits may include before_context and after_context to disambiguate repeated matches.
-- Line numbers are 1-indexed and inclusive.
-- Edits are applied sequentially in memory and written atomically only if every edit succeeds.
-- Use this for larger refactors, repeated edits in one file, or when edit_file is too fragile for the target block.
-- Use line ranges when the target block is known by position.
-- Use before_context and after_context when the same old_string appears more than once in the file."""
+- Provide path and an edits array. All edits are applied in memory and written only if every edit succeeds.
+- Each edit targets either exact text (old_string -> new_string) or an exact line range (start_line/end_line -> new_string).
+- Text-targeted edits may include before_context and after_context to disambiguate when old_string appears more than once.
+- Line numbers are 1-indexed and inclusive. Use line ranges when you know the exact position (e.g., from a search_code result or from the SoT line numbers).
+- Mix text and line-range edits freely in the same call.
+- This is the most efficient way to make several changes to one file — one tool call instead of many."""
 
 WRITE_FILE_PROMPT = """\
 Write a UTF-8 text file to the local filesystem.
