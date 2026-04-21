@@ -41,6 +41,34 @@ def is_sot_block_content(content: Any) -> bool:
     return False
 
 
+# Fingerprints that identify orchestration rules messages.
+# These are ephemeral (re-injected fresh each turn) and must NOT
+# be persisted into chat_history when resuming a session.
+_ORCHESTRATION_FINGERPRINTS = (
+    "ORCHESTRATION, BATCHING",
+    "EXPLORATION & DISCOVERY",
+    "TOOL STRATEGY",
+    "TOKEN ECONOMY & BATCHING",
+    "HOST ENVIRONMENT",
+)
+
+
+def is_orchestration_rules_content(content: Any) -> bool:
+    """Return True if the content looks like an orchestration rules block."""
+    text = ""
+    if isinstance(content, str):
+        text = content
+    elif isinstance(content, list) and content:
+        first = content[0]
+        if isinstance(first, dict) and first.get("type") == "text":
+            text = first.get("text", "")
+    if not text:
+        return False
+    # Need at least 2 fingerprints to match (avoid false positives on user messages)
+    matches = sum(1 for fp in _ORCHESTRATION_FINGERPRINTS if fp in text)
+    return matches >= 2
+
+
 def load_sot_state_from_request_json(session_dir: Path) -> SoTState | None:
     request_path = session_dir / "request.json"
     if not request_path.exists():

@@ -46,6 +46,7 @@ class ToolConfig:
     default_command_timeout_seconds: int = 120
     binary_check_size: int = 8192
     show_thinking: bool = True
+    show_full: bool = True
 
 
 @dataclass
@@ -203,6 +204,7 @@ def _parse_app_config(raw: dict[str, Any], keys_raw: dict[str, Any] | None = Non
             ),
             binary_check_size=_parse_positive_int(tools_raw.get("binary_check_size", 8192), "tools.binary_check_size"),
             show_thinking=_parse_bool(tools_raw.get("show_thinking", True), "tools.show_thinking"),
+            show_full=_parse_bool(tools_raw.get("show_full", True), "tools.show_full"),
         ),
         mcp_servers=mcp_servers,
         providers=providers,

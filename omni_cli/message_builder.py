@@ -96,11 +96,37 @@ def build_host_environment_prompt() -> str:
     add_line("User home directory", _safe_call(lambda: str(Path.home())))
     add_line("Current working directory", _safe_call(os.getcwd))
     add_line("Default shell", os.environ.get("SHELL"))
+    add_line("Active shell", _detect_active_shell())
     add_line("Terminal", os.environ.get("TERM_PROGRAM") or os.environ.get("TERM"))
     add_line("Locale", os.environ.get("LANG"))
     add_line("Python executable", _safe_call(lambda: os.path.realpath(sys.executable)))
 
     return "\n".join(lines).strip()
+
+
+def _detect_active_shell() -> str | None:
+    """Detect the shell that will actually execute run_command commands."""
+    system = platform.system().lower()
+
+    if system == "windows":
+        # Check if we're inside PowerShell by looking for its env vars
+        if os.environ.get("PSModulePath"):
+            ps_version = os.environ.get("PSVersion")
+            if ps_version:
+                return f"PowerShell {ps_version}"
+            return "PowerShell"
+        comspec = os.environ.get("COMSPEC", "")
+        if comspec:
+            return f"CMD ({comspec})"
+        return "CMD"
+
+    # Unix-like: check SHELL env var
+    shell_path = os.environ.get("SHELL", "")
+    if shell_path:
+        shell_name = os.path.basename(shell_path)
+        return shell_name  # e.g. "bash", "zsh", "fish"
+
+    return None
 
 
 def _normalize_os_name(system_name: str | None) -> str | None:

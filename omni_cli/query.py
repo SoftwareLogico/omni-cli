@@ -81,9 +81,11 @@ async def run_single_turn(
     request: ProviderRequest,
     console: Console,
     show_thinking: bool = True,
+    show_full: bool = True,
 ) -> TurnResult:
     result = TurnResult()
     render_state = StreamRenderState()
+    _tool_call_header_shown: set[int] = set()
 
     async for event in adapter.stream_turn(request):
         if event.type == "reasoning_delta":
@@ -113,6 +115,17 @@ async def run_single_turn(
         elif event.type == "tool_call":
             tool_calls = event.payload.get("tool_calls") or []
             result.tool_calls.extend(tool_calls)
+            if show_full:
+                for tool_delta in tool_calls:
+                    index = int(tool_delta.get("index", 0))
+                    func = tool_delta.get("function") or {}
+                    name = func.get("name", "")
+                    args_chunk = func.get("arguments", "")
+                    if name and index not in _tool_call_header_shown:
+                        _tool_call_header_shown.add(index)
+                        console.print(f"\n[dim]tool_call: {name}([/dim]", end="")
+                    if args_chunk:
+                        console.out(args_chunk, end="")
         elif event.type == "usage":
             usage = event.payload.get("usage") or {}
             if isinstance(usage, dict):
@@ -121,6 +134,8 @@ async def run_single_turn(
         elif event.type == "error":
             raise RuntimeError(str(event.payload.get("message", "Unknown provider error")))
 
+    if show_full and _tool_call_header_shown:
+        console.print("[dim])[/dim]")
     if result.text or (show_thinking and render_state.reasoning_started):
         console.out("\n")
 
@@ -170,6 +185,7 @@ async def run_tool_loop(
             plain_request,
             console,
             show_thinking=runtime.config.tools.show_thinking,
+            show_full=runtime.config.tools.show_full,
         )
         # SoT Step 6: Clean — save assistant response to permanent history
         assistant_message = {"role": "assistant", "content": turn_result.text}
@@ -230,6 +246,7 @@ async def run_tool_loop(
                 round_request,
                 console,
                 show_thinking=runtime.config.tools.show_thinking,
+                show_full=runtime.config.tools.show_full,
             )
         else:
             completion = await adapter.complete_turn(round_request)
@@ -611,10 +628,14 @@ def _build_tool_result_summary(tool_result: Any) -> str:
                 returned_lines = payload.get("returned_lines", "?")
                 total_lines = payload.get("total_lines", "?")
                 size = payload.get("size_bytes", "?")
-                return (
+                content = payload.get("content", "")
+                header = (
                     f"inspected {fpath} lines {start_line}-{end_line} "
                     f"({returned_lines} returned, file has {total_lines} lines, {size} bytes)"
                 )
+                if content:
+                    return f"{header}\n{content}"
+                return header
             lines = payload.get("total_lines", "?")
             size = payload.get("size_bytes", "?")
             return f"read {fpath} ({lines} lines, {size} bytes) -> added to SoT"
@@ -856,6 +877,7 @@ async def _run_streaming_round(
     request: ProviderRequest,
     console: Console,
     show_thinking: bool = True,
+    show_full: bool = True,
 ):
     text_parts: list[str] = []
     reasoning_parts: list[str] = []
@@ -863,6 +885,7 @@ async def _run_streaming_round(
     usage: dict[str, Any] = {}
     tool_state: dict[int, dict[str, Any]] = {}
     render_state = StreamRenderState()
+    _tool_call_header_shown: set[int] = set()
 
     async for event in adapter.stream_turn(request):
         if event.type == "reasoning_delta":
@@ -893,6 +916,16 @@ async def _run_streaming_round(
         elif event.type == "tool_call":
             for tool_delta in event.payload.get("tool_calls") or []:
                 _merge_tool_call_delta(tool_state, tool_delta)
+                if show_full:
+                    index = int(tool_delta.get("index", 0))
+                    func = tool_delta.get("function") or {}
+                    name = func.get("name", "")
+                    args_chunk = func.get("arguments", "")
+                    if name and index not in _tool_call_header_shown:
+                        _tool_call_header_shown.add(index)
+                        console.print(f"\n[dim]tool_call: {name}([/dim]", end="")
+                    if args_chunk:
+                        console.out(args_chunk, end="")
         elif event.type == "usage":
             event_usage = event.payload.get("usage") or {}
             if isinstance(event_usage, dict):
@@ -902,6 +935,8 @@ async def _run_streaming_round(
 
     text = "".join(text_parts)
     tool_calls = [_finalize_tool_call(tool_state[index]) for index in sorted(tool_state)]
+    if show_full and _tool_call_header_shown:
+        console.print("[dim])[/dim]")
     if text or (show_thinking and render_state.reasoning_started):
         console.out("\n")
 

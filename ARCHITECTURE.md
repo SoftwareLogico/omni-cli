@@ -109,6 +109,7 @@ No parameters. Returns delegated tasks and status (RUNNING/COMPLETED). Prefer `w
 - Delegated agents inherit runtime context and session storage rules (including `OMNI_SESSIONS_DIR` when set).
 - Boss/Worker prompt separation is enforced by the runtime (`AGENT_SYSTEM_PROMPT` vs `SUB_AGENT_SYSTEM_PROMPT`).
 - Thinking visibility is controlled from TOML under `[tools]` via `show_thinking` (default `true`). This is a persistent config setting, not a CLI parameter.
+- Full streaming visibility is controlled via `show_full` (default `true`). When enabled, tool call arguments are streamed to the terminal in real time as the model generates them (e.g., you see the JSON arguments of `run_command` or `edit_file` being built chunk by chunk). When disabled, tool calls are only shown as a single assembled line after streaming completes.
 
 ## File Discovery Tool (`list_dir`)
 

@@ -21,7 +21,7 @@ from typing import Any
 from omni_cli.prompting import prepare_turn_request
 from omni_cli.query import ConversationState, run_tool_loop
 from omni_cli.runtime import AppRuntime, bootstrap_runtime
-from omni_cli.sot import is_sot_block_content, load_sot_state_from_request_json
+from omni_cli.sot import is_sot_block_content, is_orchestration_rules_content, load_sot_state_from_request_json
 from omni_cli.source_of_truth import build_source_bundle, SourceBundle
 from omni_cli.providers.base import ProviderCapability
 from omni_cli.session_store import SessionRecord
@@ -179,7 +179,8 @@ def _load_chat_history_from_request_jsons(session_dir: Path) -> list[dict[str, A
     if not messages:
         return None
 
-    # Extract chat_history: skip system prompt, skip SoT blocks
+    # Extract chat_history: skip system prompt, SoT blocks, and orchestration rules
+    # (orchestration rules are ephemeral — the runtime injects fresh ones each turn)
     chat_messages: list[dict[str, Any]] = []
     for msg in messages:
         role = msg.get("role", "")
@@ -187,6 +188,8 @@ def _load_chat_history_from_request_jsons(session_dir: Path) -> list[dict[str, A
             continue
         content = msg.get("content", "")
         if role == "user" and is_sot_block_content(content):
+            continue
+        if role == "user" and is_orchestration_rules_content(content):
             continue
         chat_messages.append(msg)
 
