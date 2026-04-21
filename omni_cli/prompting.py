@@ -21,14 +21,9 @@ def prepare_turn_request(
     provider = config.provider(selected_provider)
     if not provider.enabled:
         raise ValueError(f"Provider is not configured: {selected_provider}")
-    session_model = session.model.strip() if isinstance(session.model, str) else ""
+
     if model_override and model_override.strip():
         model = model_override.strip()
-    elif selected_provider in {"lmstudio", "ollama"} and not provider.model.strip():
-        
-        model = ""
-    elif selected_provider == session.provider and session_model:
-        model = session_model
     else:
         model = provider.model
 
@@ -40,7 +35,6 @@ def prepare_turn_request(
         session.max_output_tokens if session.max_output_tokens is not None else provider.max_output_tokens
     )
 
-    # Build the appropriate system prompt and orchestration rules.
     system_prompt = build_system_prompt()
     orchestration_rules = build_orchestration_rules(is_sub_agent=disable_delegation)
 

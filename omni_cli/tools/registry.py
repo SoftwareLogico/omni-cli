@@ -41,12 +41,14 @@ class ToolRegistry:
         capability: ProviderCapability,
         model: str,
         disable_delegation: bool = False,
+        sot_state: Any = None,  # <--- AÑADIR ESTO
     ) -> None:
         self.runtime = runtime
         self.session_id = session_id
         self.capability = capability
         self.model = model
         self.disable_delegation = disable_delegation
+        self.sot_state = sot_state  # <--- AÑADIR ESTO
         self._read_cache: dict[tuple[str, str | None, int | None, int | None], tuple[int, dict[str, Any]]] = {}
 
     def schemas(self) -> list[dict[str, Any]]:
@@ -245,7 +247,7 @@ class ToolRegistry:
         return execute_delete_file(arguments, self.runtime.paths.root_dir)
 
     def _get_session_state(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return execute_get_session_state(arguments, self.runtime, self.session_id)
+        return execute_get_session_state(arguments, self.runtime, self.session_id, self.sot_state)  # <--- AÑADIR self.sot_state
 
     def _update_session(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return execute_update_session(arguments, self.runtime, self.session_id)

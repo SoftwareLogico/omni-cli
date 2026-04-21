@@ -155,6 +155,14 @@ class OpenAICompatibleAdapter:
 
         caps = model_info.get("capabilities", {})
         quant = model_info.get("quantization", {}) or {}
+        
+        allocated_context_length = None
+        loaded_instances = model_info.get("loaded_instances")
+        if isinstance(loaded_instances, list) and len(loaded_instances) > 0:
+            config = loaded_instances[0].get("config", {})
+            if isinstance(config, dict):
+                allocated_context_length = config.get("context_length")
+
         self.capability = ProviderCapability(
             supports_tools=bool(caps.get("trained_for_tool_use", False)),
             supports_images=bool(caps.get("vision", False)),
@@ -162,25 +170,33 @@ class OpenAICompatibleAdapter:
             supports_audio=False,
             supports_video=False,
             context_length=model_info.get("max_context_length"),
+            allocated_context_length=allocated_context_length,
             quantization=quant.get("name", ""),
             parameter_count=model_info.get("params_string", ""),
         )
 
     async def _detect_ollama_capabilities(self) -> None:
-        """Ollama: Use /api/ps to find the currently running model."""
+        """Ollama: Use /api/ps to find the currently running model and allocated context."""
         origin = _extract_origin(self.base_url)
+        allocated_context_length = None
         try:
             async with httpx.AsyncClient(timeout=10.0) as client:
-                if not self.model:
-                    # Query /api/ps to get ONLY the models currently loaded in RAM/VRAM
-                    resp_ps = await client.get(f"{origin}/api/ps")
-                    if resp_ps.status_code == 200:
-                        running = resp_ps.json().get("models",[])
-                        if running:
-                            self.model = running[0].get("name", "")
+                # Always check /api/ps to get the allocated context length of running models
+                resp_ps = await client.get(f"{origin}/api/ps")
+                if resp_ps.status_code == 200:
+                    running_models = resp_ps.json().get("models",[])
+                    if not self.model and running_models:
+                        self.model = running_models[0].get("name", "")
                     
-                    if not self.model:
-                        raise ValueError("No model is currently running in Ollama. Please run a model first or specify one in omni.toml.")
+                    # If we have a model, see if it's currently running to get its actual allocated context
+                    if self.model:
+                        for rm in running_models:
+                            if rm.get("name") == self.model or rm.get("model") == self.model:
+                                allocated_context_length = rm.get("context_length")
+                                break
+
+                if not self.model:
+                    raise ValueError("No model is currently running in Ollama. Please run a model first or specify one in omni.toml.")
 
                 resp = await client.post(
                     f"{origin}/api/show",
@@ -214,6 +230,7 @@ class OpenAICompatibleAdapter:
             supports_audio=False,
             supports_video=False,
             context_length=context_length,
+            allocated_context_length=allocated_context_length,
             quantization=quantization,
             parameter_count=parameter_count,
         )

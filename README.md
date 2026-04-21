@@ -23,6 +23,7 @@
 - **⚡ Batch Orchestration**: Multi-tools + bash/Python scripts in ONE turn.
 - **🔧 Full Tools**: 25+ incl. unrestricted shell, precise edits, MCP extensible.
 - **🌐 Multi-Provider**: Switch Ollama/LMStudio/OpenRouter live.
+- **💰 Native Prompt Caching**: Payload architecture designed for prefix-matching, saving up to 50% API costs on long histories by caching static dialogue and keeping dynamic files at the bottom.
 
 👉 [SoT](SoT_Method.md) | [Tools](ARCHITECTURE.md) | [Roadmap](ROADMAP.md)
 
@@ -128,6 +129,9 @@ Most AI coding agents fail because they append every file read and every code ch
 
 1. **Permanent History (`chat_history`):** Only contains dialogue and lightweight tool metadata (e.g., `"read file X -> added to SoT"`).
 2. **Ephemeral Source of Truth (SoT):** This method tracks the latest state of your context files so the model always reads the most up-to-date version, and not 10 different versions of the same file from the chat history. When the model uses a tool to read or edit a file, the SoT updates that file's content. The model can then refer to the SoT for the latest state of any file, without bloating the chat history.
+
+**Smart Token Economy (Permanent vs. Ephemeral):**
+You can attach core files (like database schemas or project guidelines) permanently to a session so the AI _always_ knows them. Meanwhile, files the AI reads to fix a specific bug are treated as "ephemeral"—they stay in the SoT while needed, and can be detached immediately after the bug is fixed to keep your token usage incredibly low.
 
 **Result:** The model always sees the absolute latest state of your project. Context grows linearly, not exponentially.
 👉 [Read the full SoT Method explanation here.](SoT_Method.md)

@@ -79,6 +79,7 @@ RUNTIME_RULES = """\
 RUNTIME RULES
 - After your tool calls are executed, the system injects an updated Source of Truth (SoT) block into your context, just before the latest user instructions.
 - The Source of Truth (SoT) contains the current contents of all tracked files, read fresh from disk. It is always authoritative.
+- CRITICAL: To know what files are currently in your SoT, LOOK AT THE '=== SOURCE OF TRUTH ===' BLOCK in your prompt. Do not rely on `get_session_state` for this, as it only lists permanently attached files, not files you just read.
 - The Source of Truth (SoT) also includes multimodal content (images, audio, video) when the model supports those modalities.
 - Even when this should not be the case is there are any file contents from earlier tool results or earlier messages. Only trust the latest Source of Truth (SoT) block.
 - Most tool results are metadata only (path, size, status). They do NOT contain file contents. Some discovery tools may include bounded excerpts needed for reasoning.
@@ -87,14 +88,14 @@ RUNTIME RULES
 - If you need to see one file, call read_text_file. If you need to read several known files together, call read_many_files. Prefer full reads so the contents appear in the next Source of Truth (SoT) block.
 - `read_text_file` also supports `start_line` and `end_line` for targeted inspection of very large UTF-8 text files. Partial line reads are for inspection only and do not hydrate the full file into the Source of Truth (SoT).
 - When you edit or write a file, the system instantly refreshes the Source of Truth (SoT) with the updated version. CRITICAL: NEVER call read tools on a file that is already in the Source of Truth (SoT) just to verify your edits.
-- If your Source of Truth (SoT) becomes heavily bloated with files you haven't used in a long time, you may non-invasively suggest to the user that they can be removed, but do not aggressively detach them yourself unless instructed.
 - Never invoke omni-cli itself from shell commands. Use the available tools directly instead of recursive self-calls.
 - For date/time questions, use the HOST ENVIRONMENT values exactly as provided. Do not infer weekday names from memory when local/UTC weekday fields are available.
 
 IF A TOOL OR DELEGATED TASK FAILS (RESOURCEFULNESS & ACCOUNTABILITY):
 1. BE RESOURCEFUL: If a sub-agent fails, or a command errors out, DO NOT wash your hands. Read the error carefully. Did you give bad paths? Were filters wrong? Did it lack permissions?
 2. PIVOT STRATEGY (ANTI-LOOP): Do not get stuck in an infinite loop trying the exact same failing approach. If approach A fails twice, invent approach B (e.g., use a different shell command, write a python script, or do the task yourself instead of delegating).
-3. ASK FOR HELP ONLY WHEN BLOCKED: Make the user's life easy. Do not ask the user to do things you can do yourself. However, if a command strictly requires interactive user input (like a `sudo` password), or if you have exhausted all logical workarounds for a truly impossible task, explain the situation clearly to the user and ask for the specific input or permission needed.
+3. TRUST YOUR EYES: If a tool contradicts what you clearly see in your '=== SOURCE OF TRUTH ===' block, trust the SoT block. It is the absolute truth.
+4. ASK FOR HELP ONLY WHEN BLOCKED: Make the user's life easy. Do not ask the user to do things you can do yourself.
 """
 
 AGENT_SYSTEM_PROMPT = """\
@@ -319,7 +320,7 @@ Inspect the current session state.
 Returns:
 - session id and title;
 - active provider, model, temperature and output token limit;
-- current Source of Truth (SoT) entries;
+- PERMANENTLY attached Source of Truth (SoT) entries (Note: this does NOT include files you read ephemerally via read_text_file. To see those, look at your prompt's SoT block).
 - enabled providers with their configured defaults.
 
 Use this tool whenever you need to understand the session before changing runtime or source state."""
@@ -339,7 +340,8 @@ Use this to change the active runtime for future turns in the current session. I
 DETACH_PATH_PROMPT = """\
 Remove one or more files or directories from the session Source of Truth (SoT).
 
-Use path for a single target or paths for batch removal. Prefer a single batch call when removing multiple paths from the authoritative working set for the session."""
+Use path for a single target or paths for batch removal. Prefer a single batch call when removing multiple paths.
+CRITICAL: You can use this tool to remove ANY file currently visible in your '=== SOURCE OF TRUTH ===' block, regardless of whether it was permanently attached or just read via read_text_file."""
 
 ATTACH_PATH_PROMPT = """\
 Attach one or more files or directories to the session Source of Truth (SoT) so future turns can reference them. \

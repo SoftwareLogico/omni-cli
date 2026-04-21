@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import signal
 import sys
+import time
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
@@ -22,6 +23,7 @@ from omni_cli.query import ConversationState, run_tool_loop
 from omni_cli.runtime import AppRuntime, bootstrap_runtime
 from omni_cli.sot import is_sot_block_content, load_sot_state_from_request_json
 from omni_cli.source_of_truth import build_source_bundle, SourceBundle
+from omni_cli.providers.base import ProviderCapability
 from omni_cli.session_store import SessionRecord
 
 
@@ -105,36 +107,32 @@ def _submit_shortcut_help_text() -> str:
     return "Use Ctrl+Enter to send if your terminal supports it; otherwise Esc then Enter."
 
 
-def _format_capability_line(cap) -> str:
-    """Build a compact capability summary line from ProviderCapability."""
-    parts: list[str] = []
-    if cap.context_length:
-        parts.append(f"ctx={_format_token_count(cap.context_length)}")
-    if cap.max_completion_tokens:
-        parts.append(f"max_out={_format_token_count(cap.max_completion_tokens)}")
-    if cap.modality:
-        parts.append(f"modality={cap.modality}")
+def _format_capability_line(cap: ProviderCapability) -> tuple[str, str]:
+    stats: list[str] = []
+    
+    if cap.allocated_context_length or cap.context_length:
+        if cap.allocated_context_length:
+            val = f"{_format_token_count(cap.allocated_context_length)}/{_format_token_count(cap.context_length)}"
+        else:
+            val = f"{_format_token_count(cap.context_length)}"
+        stats.append(f"ctx={val}")
+        
     if cap.parameter_count:
-        parts.append(f"params={cap.parameter_count}")
+        stats.append(f"params={cap.parameter_count}")
     if cap.quantization:
-        parts.append(f"quant={cap.quantization}")
+        stats.append(f"quant={cap.quantization}")
 
     flags: list[str] = []
-    if cap.supports_tools:
-        flags.append("tools")
-    if cap.supports_images:
-        flags.append("vision")
-    if cap.supports_pdfs:
-        flags.append("pdf")
-    if cap.supports_audio:
-        flags.append("audio")
-    if cap.supports_video:
-        flags.append("video")
+    if cap.supports_tools: flags.append("tools")
+    if cap.supports_images: flags.append("vision")
+    if cap.supports_pdfs: flags.append("pdf")
+    if cap.supports_audio: flags.append("audio")
+    if cap.supports_video: flags.append("video")
 
-    if flags:
-        parts.append("capabilities=" + ",".join(flags))
-
-    return " | ".join(parts) if parts else "capabilities=unknown"
+    stats_line = " | ".join(stats) if stats else ""
+    caps_line = f"capabilities={','.join(flags)}" if flags else ""
+    
+    return stats_line, caps_line
 
 
 def _format_token_count(n: int) -> str:
@@ -474,7 +472,13 @@ async def _run_command_turn(
         from omni_cli.query import ConversationState
         conversation_state = ConversationState()
 
+    
+    start_time = time.perf_counter()
+    
     result = await run_tool_loop(runtime, request, console, conversation_state=conversation_state)
+    
+    
+    turn_duration = time.perf_counter() - start_time
 
     if result.usage:
         # Leer el estado de los agentes
@@ -505,20 +509,28 @@ async def _run_command_turn(
         usage_table.add_row("Total Tokens", str(total_tokens), style="bold cyan")
         usage_table.add_row("Total Cost", f"${result.usage.get('cost', 0.0):.6f}", style="bold green")
 
-        # --- NUEVO: Barra de límite de contexto ---
         adapter = runtime.provider_adapter(record.provider, record.model)
-        ctx_len = adapter.capability.context_length
+        
+        ctx_len = adapter.capability.allocated_context_length or adapter.capability.context_length
+        
         if ctx_len and ctx_len > 0 and isinstance(latest_prompt_tokens, (int, float)):
             pct = min(100, int((latest_prompt_tokens / ctx_len) * 100))
             filled = int((pct / 100) * 10)
             bar = "█" * filled + "░" * (10 - filled)
             color = "red" if pct > 90 else "yellow" if pct > 75 else "green"
+            
+            label = "Context Limit (Allocated)" if adapter.capability.allocated_context_length else "Context Limit (Max)"
+            
             usage_table.add_row(
-                "Context Limit",
+                label,
                 f"[{color}]{bar} {pct}% ({int(latest_prompt_tokens)}/{ctx_len})[/{color}]",
             )
+            
+            if pct >= 90:
+                usage_table.add_row("Warning", "[bold red]⚠️ Context almost full! Ask the model to remove some not used SoT files (If Any) [/bold red]")
+            elif pct >= 75:
+                usage_table.add_row("Warning", "[bold yellow]⚠️ Context is getting full. Consider detaching unused files.[/bold yellow]")
 
-        # --- NUEVO: Mostrar archivos en el SoT ---
         sot_files = set(conversation_state.sot.tracked_files.keys()).union(conversation_state.sot.tracked_media.keys())
         if sot_files:
             try:
@@ -539,6 +551,23 @@ async def _run_command_turn(
             for agent_name, status in agent_statuses:
                 color = "green" if status.upper() == "SUCCESS" else "red"
                 usage_table.add_row(f"  {agent_name}", f"[{color}]{status}[/{color}]")
+                
+        
+        try:
+            usage_table.add_section()
+        except Exception:
+            pass
+            
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        
+        h = int(turn_duration // 3600)
+        m = int((turn_duration % 3600) // 60)
+        s = turn_duration % 60
+        duration_str = f"{h:02d}:{m:02d}:{s:06.3f}" if h > 0 else f"{m:02d}:{s:06.3f}"
+        
+        usage_table.add_row("Timestamp", now_str)
+        usage_table.add_row("Turn Duration", duration_str, style="bold yellow")
                 
         console.print(usage_table)
 
@@ -600,17 +629,10 @@ async def _run_prompt(
 
         if model_override:
             updated_model = model_override
-        elif updated_provider in {"lmstudio", "ollama"} and not provider_config.model.strip():
-            updated_model = ""
-        elif provider_name and provider_name != record.provider:
+        else:
             updated_model = provider_config.model
             if not updated_model and updated_provider not in {"lmstudio", "ollama"}:
                 raise ValueError(f"Provider {updated_provider} has no default model configured. Pass --model explicitly.")
-        else:
-            if updated_provider in {"lmstudio", "ollama"} and not provider_config.model.strip():
-                updated_model = ""
-            else:
-                updated_model = record.model
 
         if updated_provider != record.provider or updated_model != record.model:
             record = runtime.sessions.update_session(
@@ -636,20 +658,23 @@ async def _run_prompt(
     active_provider = record.provider
     active_model = record.model
 
-    # Detect model capabilities before showing the banner
     adapter = await runtime.provider_adapter_async(active_provider, active_model)
-    cap_line = _format_capability_line(adapter.capability)
+    stats_line, caps_line = _format_capability_line(adapter.capability)
 
-    
     if not active_model and adapter.model:
         active_model = adapter.model
         record = runtime.sessions.update_session(record.id, model=active_model)
 
+    start_now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    # Constructing the header lines
+    line1 = f"session={record.id} | provider={active_provider} | model={active_model}"
+    line2 = f"started={start_now_str} | {stats_line}"
+    line3 = f"{caps_line} | tools={'off' if no_tools else 'on'}"
+    
     console.print(
         Panel.fit(
-            f"session={record.id} | provider={active_provider} | model={active_model}\n"
-            f"{cap_line}\n"
-            f"tools={'off' if no_tools else 'on'}\n"
+            f"{line1}\n{line2}\n{line3}\n"
             f"{_submit_shortcut_help_text()} Press Ctrl+C on an empty prompt to leave.",
             title="omni-cli",
         )

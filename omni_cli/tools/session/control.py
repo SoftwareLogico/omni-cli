@@ -58,9 +58,17 @@ def execute_get_session_state(
     arguments: dict[str, Any],
     runtime: Any,
     session_id: str,
+    sot_state: Any = None,  # <--- AÑADIR ESTO
 ) -> dict[str, Any]:
     _ensure_no_arguments(arguments)
     record = runtime.sessions.load(session_id)
+    
+    # Recopilar archivos trackeados en memoria (Tool-backed)
+    in_memory_files = []
+    if sot_state is not None:
+        in_memory_files = list(sot_state.tracked_files.keys()) + list(sot_state.tracked_media.keys())
+        in_memory_files = list(set(in_memory_files)) # Eliminar duplicados
+
     provider_summaries = []
     for provider_name in KNOWN_PROVIDERS:
         provider = runtime.config.provider(provider_name)
@@ -82,7 +90,7 @@ def execute_get_session_state(
         "model": record.model,
         "temperature": record.temperature,
         "max_output_tokens": record.max_output_tokens,
-        "source_entry_count": len(record.source_entries),
+        "permanently_attached_entries": len(record.source_entries), 
         "source_entries": [
             {
                 "id": entry.id,
@@ -94,6 +102,7 @@ def execute_get_session_state(
             }
             for entry in record.source_entries
         ],
+        "ephemeral_tracked_files": in_memory_files,
         "providers": provider_summaries,
     }
 

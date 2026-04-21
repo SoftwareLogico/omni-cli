@@ -168,8 +168,16 @@ Non-text behavior:
 ### `omni_cli/query.py`
 
 The core of the orchestrator. Runs the loop against the provider, executes tool calls, maintains the `SoTState`, and rebuilds the SoT after each tool call.
-**Payload assembly:** To combat "Lost in the Middle" and recency bias, the payload is assembled as:
-`[System Prompt] + [Past Chat History] + [Ephemeral SoT Block] + [Latest User Prompt & Tool Calls]`
+
+**Payload Assembly & Prompt Caching Optimization:**
+To combat "Lost in the Middle" syndrome and maximize API cost savings, the payload is strictly ordered like this:
+`[System Prompt] -> [Past Chat History] -> [Ephemeral SoT Block] -> [Latest User Prompt]`
+
+Why this exact order? **Prefix-Matching Prompt Caching.**
+Modern APIs (like Anthropic and OpenAI) cache tokens from top to bottom. If a single token changes, the cache breaks for everything below it.
+
+- If we put the dynamic SoT at the _top_, every time a file is edited, the cache would break, and you would pay full price to re-process the entire 100k+ token chat history.
+- By putting the static `Chat History` at the top and the dynamic `SoT Block` at the bottom, the API successfully caches the system prompt and your entire conversation history. The cache only breaks at the very end of the payload when a file changes. This architectural decision makes long sessions incredibly fast and cheap.
 
 ### `omni_cli/source_of_truth.py`
 
@@ -206,10 +214,12 @@ Example `omni.toml` MCP entry:
 **`chat_history` (permanent):** List of messages that grows between turns. Contains user prompts, assistant responses, and lightweight tool metadata. Never contains file content snapshots.
 **SoT block (ephemeral):** Built from disk in each round. Contains the current content of tracked files and media. Injected just before the latest user prompt, and discarded immediately after.
 
-### SoT provenance
+### SoT provenance (Permanent vs. Ephemeral)
 
-- `session-backed`: Comes from the persisted source of the session. Refreshed at the start of each turn.
-- `tool-backed`: Appeared by a reading or mutation made during the interactive session. Persists between interactive turns until explicitly deleted.
+The Source of Truth injected into the prompt is a combination of two memory layers:
+
+- **Session-backed (Permanent):** Comes from the persisted `session.json`. These are core files (like preprompts, schemas, or main guidelines) that are refreshed and injected at the start of _every_ turn in that session. Managed via `attach_path_to_source` or the CLI `sot_attach`.
+- **Tool-backed (Ephemeral):** Appeared because the model actively read them during the current conversation (e.g., via `read_text_file` to fix a specific bug). They live in memory to provide immediate context but can be easily discarded using `detach_path_from_source` once the task is done to save tokens.
 
 ### SoT management tools
 

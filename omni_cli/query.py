@@ -195,6 +195,7 @@ async def run_tool_loop(
             adapter.capability,
             request.model,
             request.disable_delegation,
+            conversation_state.sot,  # <--- AÑADIR ESTO
         )
 
         if not is_task:
@@ -806,6 +807,11 @@ def _build_tool_result_summary(tool_result: Any) -> str:
     if name == "delete_file":
         fpath = payload.get("path", "?")
         return f"deleted {fpath}"
+
+    if name == "get_session_state":
+        # Filtramos 'providers' porque ocupa muchos tokens y rara vez se necesita
+        state_info = {k: v for k, v in payload.items() if k != "providers"}
+        return f"Session state: {json.dumps(state_info, ensure_ascii=False)}"
 
     # Fallback
     return f"ok {json.dumps({k: v for k, v in payload.items() if k not in ('content', 'ok', 'base64')})}"[:200]
