@@ -8,13 +8,14 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from omni_cli.constants import (
+    VCS_DIRS,
+    SEARCH_DEFAULT_HEAD_LIMIT,
+    SEARCH_MAX_LINE_LENGTH,
+    SEARCH_TIMEOUT_SECONDS,
+)
 from omni_cli.tools.utils.path_helpers import resolve_path
 from omni_cli.tools.utils.validators import _require_string
-
-VCS_DIRS = {".git", ".svn", ".hg", ".bzr", ".jj", ".sl"}
-DEFAULT_HEAD_LIMIT = 200
-MAX_LINE_LENGTH = 500
-TIMEOUT_SECONDS = 30
 
 # Common extension-to-type mapping for the `type` filter when using the Python fallback.
 _TYPE_EXTENSIONS: dict[str, tuple[str, ...]] = {
@@ -182,8 +183,8 @@ def _python_search(
                     for m in regex.finditer(content):
                         line_num = content[:m.start()].count("\n") + 1
                         matched_line = content[content.rfind("\n", 0, m.start()) + 1:content.find("\n", m.end())]
-                        if len(matched_line) > MAX_LINE_LENGTH:
-                            matched_line = matched_line[:MAX_LINE_LENGTH]
+                        if len(matched_line) > SEARCH_MAX_LINE_LENGTH:
+                            matched_line = matched_line[:SEARCH_MAX_LINE_LENGTH]
                         if show_line_numbers:
                             results.append(f"{rel_path}:{line_num}:{matched_line}")
                         else:
@@ -220,8 +221,8 @@ def _python_search(
                 if idx > prev_idx + 1 and prev_idx >= 0:
                     results.append("--")  # separator like ripgrep
                 line_text = lines[idx]
-                if len(line_text) > MAX_LINE_LENGTH:
-                    line_text = line_text[:MAX_LINE_LENGTH]
+                if len(line_text) > SEARCH_MAX_LINE_LENGTH:
+                    line_text = line_text[:SEARCH_MAX_LINE_LENGTH]
                 if show_line_numbers:
                     sep = ":" if idx in match_indices else "-"
                     results.append(f"{rel_path}{sep}{idx + 1}{sep}{line_text}")
@@ -277,7 +278,7 @@ def execute_search_code(arguments: dict[str, Any], root_dir: Path) -> dict[str, 
     if not root_str.endswith("/") and not root_str.endswith("\\"):
         root_str += "/"
 
-    effective_limit = head_limit if head_limit is not None else DEFAULT_HEAD_LIMIT
+    effective_limit = head_limit if head_limit is not None else SEARCH_DEFAULT_HEAD_LIMIT
     if effective_limit == 0:
         limited = raw_lines[offset:]
         was_truncated = False
@@ -354,7 +355,7 @@ def _search_with_ripgrep(
     for d in VCS_DIRS:
         args.extend(["--glob", f"!{d}"])
 
-    args.extend(["--max-columns", str(MAX_LINE_LENGTH)])
+    args.extend(["--max-columns", str(SEARCH_MAX_LINE_LENGTH)])
 
     if multiline:
         args.extend(["-U", "--multiline-dotall"])
@@ -401,13 +402,13 @@ def _search_with_ripgrep(
 
     try:
         proc = subprocess.run(
-            args, capture_output=True, text=True, timeout=TIMEOUT_SECONDS,
+            args, capture_output=True, text=True, timeout=SEARCH_TIMEOUT_SECONDS,
         )
     except FileNotFoundError:
         raise RuntimeError("ripgrep binary not found at resolved path")
     except subprocess.TimeoutExpired:
         raise RuntimeError(
-            f"search timed out after {TIMEOUT_SECONDS}s. "
+            f"search timed out after {SEARCH_TIMEOUT_SECONDS}s. "
             "Try a narrower pattern, glob filter, or smaller search path."
         )
 

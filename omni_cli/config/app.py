@@ -47,6 +47,10 @@ class ToolConfig:
     binary_check_size: int = 8192
     show_thinking: bool = True
     show_full: bool = True
+    max_rounds: int = 25
+    delegated_max_rounds: int = 8
+    repeat_limit: int = 3
+    delegated_repeat_limit: int = 2
 
 
 @dataclass
@@ -205,6 +209,10 @@ def _parse_app_config(raw: dict[str, Any], keys_raw: dict[str, Any] | None = Non
             binary_check_size=_parse_positive_int(tools_raw.get("binary_check_size", 8192), "tools.binary_check_size"),
             show_thinking=_parse_bool(tools_raw.get("show_thinking", True), "tools.show_thinking"),
             show_full=_parse_bool(tools_raw.get("show_full", True), "tools.show_full"),
+            max_rounds=_parse_positive_int(tools_raw.get("max_rounds", 25), "tools.max_rounds"),
+            delegated_max_rounds=_parse_positive_int(tools_raw.get("delegated_max_rounds", 8), "tools.delegated_max_rounds"),
+            repeat_limit=_parse_positive_int(tools_raw.get("repeat_limit", 3), "tools.repeat_limit"),
+            delegated_repeat_limit=_parse_positive_int(tools_raw.get("delegated_repeat_limit", 2), "tools.delegated_repeat_limit"),
         ),
         mcp_servers=mcp_servers,
         providers=providers,

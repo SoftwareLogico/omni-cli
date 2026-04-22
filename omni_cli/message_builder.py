@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from omni_cli.config.prompts import AGENT_SYSTEM_PROMPT, JB_SYSTEM_PROMPT, RUNTIME_RULES, SUB_AGENT_SYSTEM_PROMPT
+from omni_cli.constants import SOT_MARKER
 from omni_cli.utils.text import _count_lines
 
 
@@ -62,7 +63,8 @@ def build_host_environment_prompt() -> str:
     add_line("Operating system", _normalize_os_name(_safe_call(platform.system)))
     add_line("OS release", _safe_call(platform.release))
     add_line("OS version", _safe_call(platform.version))
-    add_line("Architecture", _safe_call(platform.machine))
+    add_line("Architecture", _normalize_arch(_safe_call(platform.machine)))
+    add_line("Processor", _safe_call(platform.processor) or None)
     add_line("Hostname", _safe_call(socket.gethostname))
 
     try:
@@ -129,6 +131,19 @@ def _detect_active_shell() -> str | None:
     return None
 
 
+def _normalize_arch(machine: str | None) -> str | None:
+    if not machine:
+        return None
+    lowered = machine.strip().lower()
+    if lowered in ("amd64", "x86_64"):
+        return "x64"
+    if lowered in ("x86", "i386", "i686"):
+        return "x86"
+    if lowered in ("arm64", "aarch64"):
+        return "arm64"
+    return machine.strip()
+
+
 def _normalize_os_name(system_name: str | None) -> str | None:
     if not system_name:
         return None
@@ -165,7 +180,7 @@ def build_sot_user_message(
     tracked_media: {absolute_path: content parts from read_text_file}
     media_file_count: number of distinct media FILES (not parts)
     """
-    text_sections = ["=== SOURCE OF TRUTH ==="]
+    text_sections = [SOT_MARKER]
 
     file_count = len(tracked_files) + media_file_count
     if tracked_files or tracked_media:

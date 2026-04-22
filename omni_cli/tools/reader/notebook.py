@@ -8,7 +8,6 @@ from omni_cli.tools.core import ToolPayload
 from omni_cli.tools.utils.content_parts import (
     _append_text_part,
     _image_part,
-    _text_part,
     _tool_meta_message,
 )
 

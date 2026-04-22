@@ -108,8 +108,19 @@ No parameters. Returns delegated tasks and status (RUNNING/COMPLETED). Prefer `w
 - Global CLI flag `--config <path>` can be passed before commands to use a specific TOML config.
 - Delegated agents inherit runtime context and session storage rules (including `OMNI_SESSIONS_DIR` when set).
 - Boss/Worker prompt separation is enforced by the runtime (`AGENT_SYSTEM_PROMPT` vs `SUB_AGENT_SYSTEM_PROMPT`).
-- Thinking visibility is controlled from TOML under `[tools]` via `show_thinking` (default `true`). This is a persistent config setting, not a CLI parameter.
-- Full streaming visibility is controlled via `show_full` (default `true`). When enabled, tool call arguments are streamed to the terminal in real time as the model generates them (e.g., you see the JSON arguments of `run_command` or `edit_file` being built chunk by chunk). When disabled, tool calls are only shown as a single assembled line after streaming completes.
+All runtime tool settings live in `[tools]` inside `omni.toml`:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `output_limit` | `12000` | Max characters of tool output before truncation. |
+| `default_command_timeout_seconds` | `120` | Default timeout for `run_command` foreground execution. |
+| `binary_check_size` | `8192` | Byte threshold for binary file detection in `read_text_file`. |
+| `show_thinking` | `true` | Stream the model's reasoning/thinking tokens to the terminal. |
+| `show_full` | `true` | Stream tool call arguments in real time as the model generates them. When disabled, tool calls are only shown as a single assembled line after streaming completes. |
+| `max_rounds` | `25` | Max tool-call rounds the boss agent can execute per user prompt before the runtime stops it. |
+| `delegated_max_rounds` | `8` | Max tool-call rounds a sub-agent can execute before being stopped. |
+| `repeat_limit` | `3` | Max consecutive identical rounds (same tools, same arguments) the boss can repeat before the runtime aborts with a loop warning. |
+| `delegated_repeat_limit` | `2` | Same as above but for sub-agents. |
 
 ## File Discovery Tool (`list_dir`)
 

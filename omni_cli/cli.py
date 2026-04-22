@@ -29,8 +29,7 @@ from omni_cli.runtime import AppRuntime, bootstrap_runtime
 from omni_cli.sot import is_sot_block_content, is_orchestration_rules_content, load_sot_state_from_request_json
 from omni_cli.source_of_truth import build_source_bundle, SourceBundle
 from omni_cli.providers.base import ProviderCapability
-from omni_cli.session_store import SessionRecord
-from omni_cli.message_builder import _detect_active_shell, _normalize_os_name
+from omni_cli.message_builder import _detect_active_shell, _normalize_arch, _normalize_os_name
 
 
 console = Console()
@@ -699,7 +698,7 @@ async def _run_prompt(
     # Host environment info
     os_name = _normalize_os_name(platform.system()) or "Unknown"
     os_release = platform.release() or ""
-    arch = platform.machine() or ""
+    arch = _normalize_arch(platform.machine()) or ""
     hostname = ""
     try:
         hostname = socket.gethostname()

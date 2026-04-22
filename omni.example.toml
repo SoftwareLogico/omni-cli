@@ -14,6 +14,10 @@ default_command_timeout_seconds = 120
 binary_check_size = 8192
 show_thinking = true
 show_full = true
+max_rounds = 25                  # max tool-call rounds per user prompt (boss agent)
+delegated_max_rounds = 8         # max tool-call rounds for a sub-agent
+repeat_limit = 3                 # max consecutive identical rounds before abort (boss)
+delegated_repeat_limit = 2       # max consecutive identical rounds before abort (sub-agent)
 
 [providers.lmstudio]
 base_url = "http://192.168.1.XXX:1234/v1"

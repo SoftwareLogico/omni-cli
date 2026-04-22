@@ -6,6 +6,12 @@ from typing import Any
 
 from rich.console import Console
 
+from omni_cli.constants import (
+    FALLBACK_DELEGATED_MAX_ROUNDS,
+    FALLBACK_DELEGATED_REPEAT_LIMIT,
+    FALLBACK_REPEAT_LIMIT,
+    SESSION_MUTATION_TOOLS,
+)
 from omni_cli.providers.base import ProviderAdapter, ProviderRequest
 from omni_cli.runtime import AppRuntime
 from omni_cli.sot import (
@@ -18,19 +24,6 @@ from omni_cli.sot import (
 )
 from omni_cli.tools.core import ToolExecutionResult
 from omni_cli.tools import ToolRegistry
-
-
-# Tools that mutate session state (provider, model, SoT entries).
-# After these, we must re-seed tracked_files from the session.
-SESSION_MUTATION_TOOLS = {
-    "attach_path_to_source",
-    "detach_path_from_source",
-    "update_session",
-}
-
-DELEGATED_TOOL_LOOP_MAX_ROUNDS = 8
-DELEGATED_REPEAT_ROUND_LIMIT = 2
-MAIN_REPEAT_ROUND_LIMIT = 3
 
 
 @dataclass(frozen=True)
@@ -146,7 +139,7 @@ async def run_tool_loop(
     runtime: AppRuntime,
     request: ProviderRequest,
     console: Console,
-    max_rounds: int = 25,
+    max_rounds: int | None = None,
     conversation_state: ConversationState | None = None,
     is_task: bool = False,
 ) -> TurnResult:
@@ -200,8 +193,11 @@ async def run_tool_loop(
     executed_any_tool = False
     previous_round_fingerprint: tuple[RoundObservation, ...] | None = None
     repeated_round_count = 0
-    effective_max_rounds = _effective_tool_loop_max_rounds(request, max_rounds)
-    repeat_round_limit = _repeat_round_limit(request)
+    _tools_cfg = runtime.config.tools
+    if max_rounds is None:
+        max_rounds = _tools_cfg.max_rounds
+    effective_max_rounds = _effective_tool_loop_max_rounds(request, max_rounds, _tools_cfg.delegated_max_rounds)
+    repeat_round_limit = _repeat_round_limit(request, _tools_cfg.repeat_limit, _tools_cfg.delegated_repeat_limit)
 
     for round_index in range(effective_max_rounds):
         adapter = await runtime.provider_adapter_async(request.provider_name, request.model)
@@ -391,16 +387,24 @@ def _refresh_request_from_session(runtime: AppRuntime, request: ProviderRequest)
     request.orchestration_rules = build_orchestration_rules(is_sub_agent=request.disable_delegation)
 
 
-def _effective_tool_loop_max_rounds(request: ProviderRequest, default_max_rounds: int) -> int:
+def _effective_tool_loop_max_rounds(
+    request: ProviderRequest,
+    default_max_rounds: int,
+    delegated_max_rounds: int = FALLBACK_DELEGATED_MAX_ROUNDS,
+) -> int:
     if request.disable_delegation:
-        return min(default_max_rounds, DELEGATED_TOOL_LOOP_MAX_ROUNDS)
+        return min(default_max_rounds, delegated_max_rounds)
     return default_max_rounds
 
 
-def _repeat_round_limit(request: ProviderRequest) -> int:
+def _repeat_round_limit(
+    request: ProviderRequest,
+    main_limit: int = FALLBACK_REPEAT_LIMIT,
+    delegated_limit: int = FALLBACK_DELEGATED_REPEAT_LIMIT,
+) -> int:
     if request.disable_delegation:
-        return DELEGATED_REPEAT_ROUND_LIMIT
-    return MAIN_REPEAT_ROUND_LIMIT
+        return delegated_limit
+    return main_limit
 
 
 def _build_tool_call_signature(tool_call: dict[str, Any]) -> str:

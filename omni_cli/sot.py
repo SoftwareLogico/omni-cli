@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from omni_cli.constants import SOT_MARKER
 from omni_cli.message_builder import build_sot_user_message
 from omni_cli.providers.base import ProviderCapability, ProviderRequest
 from omni_cli.runtime import AppRuntime
@@ -12,9 +13,6 @@ from omni_cli.session_store import SourceEntry
 from omni_cli.source_of_truth import build_source_bundle
 from omni_cli.tools.core import ToolPayload
 from omni_cli.tools.reader.main import execute_read_text_file
-
-
-SOT_MARKER = "=== SOURCE OF TRUTH ==="
 
 
 @dataclass

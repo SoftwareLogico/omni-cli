@@ -196,6 +196,16 @@ For full agent/sub-agent command reference (including CLI flags and orchestratio
 
 For the complete and up-to-date tool and parameter reference, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
+## ⚙️ Runtime Configuration
+
+All runtime settings live in `omni.toml` under `[tools]`. In a nutshell:
+
+- **Output & detection:** `output_limit`, `binary_check_size`, `default_command_timeout_seconds`.
+- **Streaming visibility:** `show_thinking` (model reasoning), `show_full` (tool call arguments in real time).
+- **Loop limits:** `max_rounds` (boss), `delegated_max_rounds` (sub-agent), `repeat_limit` / `delegated_repeat_limit` (abort on identical consecutive rounds).
+
+For the full reference table with defaults and descriptions, see [ARCHITECTURE.md](ARCHITECTURE.md#session-and-config-notes-for-orchestration).
+
 ## 🔌 MCP Servers
 
 You can easily extend `omni-cli` with external tools using the Model Context Protocol (MCP). Just add them to your `omni.toml`:

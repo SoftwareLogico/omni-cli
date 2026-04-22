@@ -54,3 +54,27 @@ BLOCKED_DEVICE_PATHS = {
     "/dev/stdout", "/dev/stderr",
     "/dev/fd/0", "/dev/fd/1", "/dev/fd/2",
 }
+
+# ── Source of Truth ──
+SOT_MARKER = "=== SOURCE OF TRUTH ==="
+
+# ── Version control directories to exclude from searches and scans ──
+VCS_DIRS = {".git", ".svn", ".hg", ".bzr", ".jj", ".sl"}
+
+# ── search_code defaults ──
+SEARCH_DEFAULT_HEAD_LIMIT = 200
+SEARCH_MAX_LINE_LENGTH = 500
+SEARCH_TIMEOUT_SECONDS = 30
+
+# ── Tool loop fallbacks (authoritative values live in [tools] of omni.toml) ──
+FALLBACK_MAX_ROUNDS = 25
+FALLBACK_DELEGATED_MAX_ROUNDS = 8
+FALLBACK_REPEAT_LIMIT = 3
+FALLBACK_DELEGATED_REPEAT_LIMIT = 2
+
+# ── Tools that mutate the session (trigger SoT/session refresh) ──
+SESSION_MUTATION_TOOLS = {
+    "update_session",
+    "attach_path_to_source",
+    "detach_path_from_source",
+}
