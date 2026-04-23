@@ -16,7 +16,7 @@ ProviderName = Literal["lmstudio", "openrouter", "openai", "xai", "ollama"]
 DEFAULT_CONFIG_TEMPLATE = (Path(__file__).resolve().parents[2] / "omni.toml").read_text(
     encoding="utf-8"
 )
-KNOWN_PROVIDERS: tuple[ProviderName, ...] = ("lmstudio", "openrouter", "openai", "xai", "ollama")
+KNOWN_PROVIDERS: tuple[ProviderName, ...] = ("lmstudio", "openrouter", "openai", "xai", "ollama", "nvidia")
 
 
 class ConfigError(ValueError):

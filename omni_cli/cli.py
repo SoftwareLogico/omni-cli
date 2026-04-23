@@ -343,7 +343,7 @@ def _build_parser() -> ArgumentParser:
     parser.add_argument("--config", default=None, help="Path to omni.toml")
     subparsers = parser.add_subparsers(dest="command")
 
-    _PROVIDER_CHOICES = ["lmstudio", "openrouter", "openai", "xai", "ollama"]
+    _PROVIDER_CHOICES = ["lmstudio", "openrouter", "openai", "xai", "ollama", "nvidia"]
 
     # prompt — main interactive mode
     prompt = subparsers.add_parser("prompt", help="Start or resume an interactive session")

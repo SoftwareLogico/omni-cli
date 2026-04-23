@@ -61,6 +61,8 @@ class OpenAICompatibleAdapter:
             await self._detect_openrouter_capabilities()
         elif self.name == "ollama":
             await self._detect_ollama_capabilities()
+        elif self.name == "nvidia":
+            await self._detect_nvidia_capabilities()
         else:
             # openai, xai — no public model-info endpoint; leave defaults (tools on by default for cloud)
             self.capability = ProviderCapability(supports_tools=True)
@@ -232,6 +234,34 @@ class OpenAICompatibleAdapter:
             allocated_context_length=allocated_context_length,
             quantization=quantization,
             parameter_count=parameter_count,
+        )
+
+    async def _detect_nvidia_capabilities(self) -> None:
+        """NVIDIA API: Use /models endpoint to verify connectivity and list available models."""
+        try:
+            headers = {"Authorization": f"Bearer {self.api_key}", **self.extra_headers}
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                # NVIDIA usa la base_url completa para el endpoint de modelos (ej. /v1/models)
+                resp = await client.get(f"{self.base_url}/models", headers=headers)
+                if resp.status_code == 401:
+                    raise ValueError("Invalid API key for NVIDIA API.")
+                if resp.status_code != 200:
+                    raise RuntimeError(f"Failed to fetch models from NVIDIA API (HTTP {resp.status_code}).")
+                models = resp.json().get("data", [])
+        except httpx.RequestError as exc:
+            raise RuntimeError(f"Could not connect to NVIDIA API at {self.base_url}. Check your internet connection.") from exc
+
+        if not models:
+            raise ValueError("No models found in NVIDIA API. Check your API key or network.")
+
+        # El endpoint /v1/models de NVIDIA devuelve una lista simple sin metadatos de arquitectura.
+        # Asumimos capacidades estándar OpenAI-compatible para proveedores de API.
+        self.capability = ProviderCapability(
+            supports_tools=True,
+            supports_images=False,
+            supports_pdfs=False,
+            supports_audio=False,
+            supports_video=False,
         )
 
     async def stream_turn(self, request: ProviderRequest):

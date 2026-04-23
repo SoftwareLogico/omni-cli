@@ -33,6 +33,12 @@ max_output_tokens = 32768
 http_referer = ""
 app_title = ""
 
+[providers.nvidia]
+base_url = "https://integrate.api.nvidia.com/v1"
+model = "qwen/qwen3-coder-480b-a35b-instruct"
+temperature = 0.2
+max_output_tokens = 16384
+
 [providers.ollama]
 base_url = "http://192.168.1.XXX:11434/v1"
 model = "" #empty means it'll use the loaded one
