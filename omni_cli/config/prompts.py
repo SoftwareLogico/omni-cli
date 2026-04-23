@@ -369,3 +369,7 @@ Use path for a single target or paths for batch attach. Prefer a single batch ca
 Text files are included in future requests automatically; binary or non-decodable files remain as tracked references."""
 
 FILE_UNCHANGED_STUB = "File unchanged since last read."
+FILE_IN_SOT_STUB = (
+    "This file is already in your Source of Truth (SoT). Look at the '=== SOURCE OF TRUTH ==='"
+    " block in your context for its full content — do not re-read."
+)

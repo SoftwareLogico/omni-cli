@@ -19,6 +19,7 @@ from omni_cli.tools.reader.main import execute_read_text_file
 class SoTState:
     tracked_files: dict[str, str] = field(default_factory=dict)
     tracked_media: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    tracked_file_mtimes: dict[str, int] = field(default_factory=dict)
     session_source_entries: list[SourceEntry] = field(default_factory=list)
     session_tracked_file_paths: set[str] = field(default_factory=set)
     session_tracked_media_paths: set[str] = field(default_factory=set)
@@ -108,6 +109,7 @@ def merge_session_into_tracked(
     for path in list(state.session_tracked_file_paths):
         if not _is_session_backed_path(path, state.session_source_entries):
             state.tracked_files.pop(path, None)
+            state.tracked_file_mtimes.pop(path, None)
             state.session_tracked_file_paths.discard(path)
 
     for path in list(state.session_tracked_media_paths):
@@ -180,6 +182,7 @@ def update_tracked_from_tool_result(
         if isinstance(fpath, str) and fpath:
             state.tracked_files.pop(fpath, None)
             state.tracked_media.pop(fpath, None)
+            state.tracked_file_mtimes.pop(fpath, None)
             state.session_tracked_file_paths.discard(fpath)
             state.session_tracked_media_paths.discard(fpath)
 
@@ -195,6 +198,7 @@ def update_tracked_from_tool_result(
             if isinstance(fpath, str) and fpath:
                 state.tracked_files.pop(fpath, None)
                 state.tracked_media.pop(fpath, None)
+                state.tracked_file_mtimes.pop(fpath, None)
                 state.session_tracked_file_paths.discard(fpath)
                 state.session_tracked_media_paths.discard(fpath)
 
@@ -336,6 +340,12 @@ def _refresh_tracked_files_from_disk(state: SoTState) -> None:
             continue
         try:
             state.tracked_files[fpath] = path.read_text(encoding="utf-8")
+            try:
+                stat = path.stat()
+                mtime_ns = getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000))
+                state.tracked_file_mtimes[fpath] = mtime_ns
+            except OSError:
+                state.tracked_file_mtimes.pop(fpath, None)
         except (UnicodeDecodeError, OSError):
             continue
 
@@ -402,7 +412,7 @@ def _update_single_read_result(
                 state.session_tracked_media_paths.add(fpath)
         return
 
-    if ftype == "file_unchanged":
+    if ftype in {"file_unchanged", "file_in_sot"}:
         return
 
     if payload.get("partial") is True:
@@ -411,6 +421,9 @@ def _update_single_read_result(
     content = payload.get("content")
     if isinstance(content, str):
         state.tracked_files[fpath] = content
+        mtime_ns = payload.get("modified_ns")
+        if isinstance(mtime_ns, int):
+            state.tracked_file_mtimes[fpath] = mtime_ns
         if _is_session_backed_path(fpath, state.session_source_entries):
             state.session_tracked_file_paths.add(fpath)
 

@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from omni_cli.config.prompts import (
+    FILE_IN_SOT_STUB,
     FILE_UNCHANGED_STUB,
 )
 from omni_cli.providers.base import ProviderCapability
@@ -179,6 +180,8 @@ class ToolRegistry:
             supports_audio=self.capability.supports_audio,
             supports_video=self.capability.supports_video,
             file_unchanged_stub=FILE_UNCHANGED_STUB,
+            sot_state=self.sot_state,
+            file_in_sot_stub=FILE_IN_SOT_STUB,
         )
 
     def _read_many_files(self, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -192,6 +195,8 @@ class ToolRegistry:
             supports_audio=self.capability.supports_audio,
             supports_video=self.capability.supports_video,
             file_unchanged_stub=FILE_UNCHANGED_STUB,
+            sot_state=self.sot_state,
+            file_in_sot_stub=FILE_IN_SOT_STUB,
         )
 
     def _search_code(self, arguments: dict[str, Any]) -> dict[str, Any]:

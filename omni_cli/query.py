@@ -655,6 +655,8 @@ def _build_tool_result_summary(tool_result: Any) -> str:
             return f"read video {fpath} ({payload.get('size_bytes', '?')} bytes) -> added to SoT"
         elif ftype == "file_unchanged":
             return f"unchanged {fpath}"
+        elif ftype == "file_in_sot":
+            return f"{fpath} already in SoT — look at the '=== SOURCE OF TRUTH ===' block, do not re-read"
         return f"read {fpath} type={ftype}"
 
     if name == "read_many_files":

@@ -82,6 +82,8 @@ def execute_read_many_files(
     supports_audio: bool,
     supports_video: bool,
     file_unchanged_stub: str,
+    sot_state: Any = None,
+    file_in_sot_stub: str | None = None,
 ) -> ToolPayload:
     files = arguments.get("files")
     if not isinstance(files, list) or not files:
@@ -116,6 +118,8 @@ def execute_read_many_files(
                 supports_audio=supports_audio,
                 supports_video=supports_video,
                 file_unchanged_stub=file_unchanged_stub,
+                sot_state=sot_state,
+                file_in_sot_stub=file_in_sot_stub,
             )
         except Exception as exc:
             results.append({
@@ -217,6 +221,8 @@ def execute_read_text_file(
     supports_audio: bool,
     supports_video: bool,
     file_unchanged_stub: str,
+    sot_state: Any = None,
+    file_in_sot_stub: str | None = None,
 ) -> dict[str, Any]:
     from omni_cli.tools.utils.path_helpers import resolve_path
 
@@ -253,7 +259,33 @@ def execute_read_text_file(
     if start_line is not None and ext in IMAGE_EXTENSIONS | PDF_EXTENSIONS | NOTEBOOK_EXTENSIONS | AUDIO_EXTENSIONS | VIDEO_EXTENSIONS:
         raise ValueError("start_line and end_line are only valid for UTF-8 text files.")
 
-    # ── Cache check ──
+    # ── SoT check (cross-round) ──
+    # If the file is already tracked in the SoT and its disk mtime hasn't
+    # changed, the model already sees it in the '=== SOURCE OF TRUTH ===' block.
+    # Return a pointer stub instead of re-reading. Only applies to full reads
+    # of plain text files (not partial ranges, not PDF pages).
+    if (
+        sot_state is not None
+        and file_in_sot_stub is not None
+        and start_line is None
+        and end_line is None
+        and not pages
+    ):
+        tracked_mtimes = getattr(sot_state, "tracked_file_mtimes", None)
+        tracked_files = getattr(sot_state, "tracked_files", None)
+        if (
+            isinstance(tracked_files, dict)
+            and isinstance(tracked_mtimes, dict)
+            and resolved in tracked_files
+            and tracked_mtimes.get(resolved) == modified_ns
+        ):
+            return {
+                "type": "file_in_sot",
+                "path": resolved,
+                "message": file_in_sot_stub,
+            }
+
+    # ── Cache check (same-round) ──
     cached = read_cache.get((resolved, pages, start_line, end_line))
     if cached is not None:
         cached_modified_ns, _ = cached
@@ -301,6 +333,7 @@ def execute_read_text_file(
             "content": "",
             "size_bytes": 0,
             "total_lines": total_lines,
+            "modified_ns": modified_ns,
         }
         if is_partial:
             result.update(
@@ -318,6 +351,7 @@ def execute_read_text_file(
         "content": content,
         "size_bytes": size_bytes,
         "total_lines": total_lines,
+        "modified_ns": modified_ns,
     }
     if is_partial:
         result.update(
