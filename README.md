@@ -1,7 +1,7 @@
 # omni-cli 🚀 Limitless Local AI Agent
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Providers](https://img.shields.io/badge/Providers-OpenRouter%20%7C%20LMStudio%20%7C%20Ollama-brightgreen.svg)](https://github.com/softwarelogico/omni-cli)
+[![Providers](https://img.shields.io/badge/Providers-OpenRouter%20%7C%20LMStudio%20%7C%20Ollama%20%7C%20NVIDIA-brightgreen.svg)](https://github.com/softwarelogico/omni-cli)
 [![Stars](https://img.shields.io/github/stars/softwarelogico/omni-cli?style=social)](https://github.com/softwarelogico/omni-cli)
 [![License](https://img.shields.io/github/license/SoftwareLogico/omni-cli?style=flat&logo=mit)](LICENSE)
 
@@ -22,7 +22,7 @@
 - **🤖 Async Multi-Agent**: Delegate trial-and-error to cheap sub-agents (empty ctx).
 - **⚡ Batch Orchestration**: Multi-tools + bash/Python scripts in ONE turn.
 - **🔧 Full Tools**: 21+ incl. unrestricted shell, regex code search, precise edits, MCP extensible.
-- **🌐 Multi-Provider**: Switch Ollama/LMStudio/OpenRouter live.
+- **🌐 Multi-Provider**: Switch Ollama/LMStudio/OpenRouter/NVIDIA live.
 - **💰 Native Prompt Caching**: Payload architecture designed for prefix-matching, saving up to 50% API costs on long histories by caching static dialogue and keeping dynamic files at the bottom.
 
 👉 [SoT](SoT_Method.md) | [Tools](ARCHITECTURE.md) | [Roadmap](ROADMAP.md)
@@ -58,6 +58,9 @@
    [providers.ollama]
    # Usually doesn't need an API key for local models
    api_key = ""
+
+   [providers.nvidia]
+   api_key = "nvapi-your-key-here"
    ```
 
 4. Configure providers in `omni.toml` (example provider format):
@@ -80,6 +83,12 @@
    model = "model_name" # or "" to let the adapter auto-resolve
    temperature = 0.5
    max_output_tokens = 8192
+
+   [providers.nvidia]
+   base_url = "https://integrate.api.nvidia.com/v1"
+   model = "z-ai/glm-5.1"
+   temperature = 1
+   max_output_tokens = 16384
    ```
 
 5. Run the CLI:
@@ -89,7 +98,7 @@
    omni-cli
 
    # Or override the provider
-   omni-cli --provider [ollama/lmstudio/openrouter]
+   omni-cli --provider [ollama/lmstudio/openrouter/nvidia]
    #e.g: omni-cli --provider ollama
 
    # using a virtual environment (optional but recommended)

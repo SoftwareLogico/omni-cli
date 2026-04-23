@@ -42,7 +42,7 @@ Interactive main loop (Boss agent context).
 Supported flags:
 
 - `--title <text>`: set title for a new session.
-- `--provider <lmstudio|openrouter|openai|xai|ollama>`: provider override.
+- `--provider <lmstudio|openrouter|openai|xai|ollama|nvidia>`: provider override.
 - `--model <name>`: model override.
 - `--no-tools`: disables tool loop (plain chat behavior).
 
@@ -61,7 +61,7 @@ One-shot turn runner (automation/multi-agent primitive).
 
 Supported flags:
 
-- `--provider <lmstudio|openrouter|openai|xai|ollama>`
+- `--provider <lmstudio|openrouter|openai|xai|ollama|nvidia>`
 - `--model <name>`
 - `--no-tools`
 - `--disable-delegation`: removes `delegate_task` from available tools to avoid recursion loops.
