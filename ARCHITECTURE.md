@@ -113,14 +113,17 @@ All runtime tool settings live in `[tools]` inside `omni.toml`:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `output_limit` | `12000` | Max characters of tool output before truncation. |
-| `default_command_timeout_seconds` | `120` | Default timeout for `run_command` foreground execution. |
+| `default_command_timeout_seconds` | `180` | Default timeout (in seconds) applied to `run_command` foreground execution when the model does not pass an explicit `timeout_seconds`. The model is always free to override per call. |
 | `binary_check_size` | `8192` | Byte threshold for binary file detection in `read_text_file`. |
-| `show_thinking` | `true` | Stream the model's reasoning/thinking tokens to the terminal. |
-| `show_full` | `true` | Stream tool call arguments in real time as the model generates them. When disabled, tool calls are only shown as a single assembled line after streaming completes. |
+| `show_thinking` | `true` | Stream the model's reasoning/thinking tokens to the terminal. Independent of `show_full`; gates reasoning output only. |
+| `show_full` | `true` | Stream tool-call argument chunks (and any other non-reasoning, non-text chunk the provider emits) in real time as the model generates them, verbatim. When disabled, tool calls are only shown as a single assembled line after streaming completes. Provider chunks are never mutated by the runtime; `show_full` only toggles whether they are rendered live. |
 | `max_rounds` | `25` | Max tool-call rounds the boss agent can execute per user prompt before the runtime stops it. |
 | `delegated_max_rounds` | `8` | Max tool-call rounds a sub-agent can execute before being stopped. |
 | `repeat_limit` | `3` | Max consecutive identical rounds (same tools, same arguments) the boss can repeat before the runtime aborts with a loop warning. |
 | `delegated_repeat_limit` | `2` | Same as above but for sub-agents. |
+| `search_default_head_limit` | `200` | Default max number of result entries returned by a single `search_code` call when the model does not pass an explicit `head_limit`. Pass `0` from the tool call to disable. |
+| `search_max_line_length` | `500` | Per-line truncation length (characters) applied to `search_code` output. Controls both the ripgrep `--max-columns` flag and the Python fallback slicing. |
+| `search_timeout_seconds` | `30` | Hard timeout (in seconds) for a single `search_code` invocation (ripgrep subprocess or Python fallback). Keeps pathological patterns from hanging a turn. |
 
 ## File Discovery Tool (`list_dir`)
 

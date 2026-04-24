@@ -61,16 +61,16 @@ SOT_MARKER = "=== SOURCE OF TRUTH ==="
 # ── Version control directories to exclude from searches and scans ──
 VCS_DIRS = {".git", ".svn", ".hg", ".bzr", ".jj", ".sl"}
 
-# ── search_code defaults ──
-SEARCH_DEFAULT_HEAD_LIMIT = 200
-SEARCH_MAX_LINE_LENGTH = 500
-SEARCH_TIMEOUT_SECONDS = 30
-
-# ── Tool loop fallbacks (authoritative values live in [tools] of omni.toml) ──
+# ── Tool-config fallbacks (authoritative values live in [tools] of omni.toml) ──
+# Used only when the runtime calls a tool without a config-backed override
+# (e.g. direct library usage, tests, or legacy entry points).
 FALLBACK_MAX_ROUNDS = 25
 FALLBACK_DELEGATED_MAX_ROUNDS = 8
 FALLBACK_REPEAT_LIMIT = 3
 FALLBACK_DELEGATED_REPEAT_LIMIT = 2
+FALLBACK_SEARCH_DEFAULT_HEAD_LIMIT = 200
+FALLBACK_SEARCH_MAX_LINE_LENGTH = 500
+FALLBACK_SEARCH_TIMEOUT_SECONDS = 30
 
 # ── Tools that mutate the session (trigger SoT/session refresh) ──
 SESSION_MUTATION_TOOLS = {

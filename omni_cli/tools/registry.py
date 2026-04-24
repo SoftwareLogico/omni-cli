@@ -200,7 +200,14 @@ class ToolRegistry:
         )
 
     def _search_code(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return execute_search_code(arguments, self.runtime.paths.root_dir)
+        tools_cfg = self.runtime.config.tools
+        return execute_search_code(
+            arguments,
+            self.runtime.paths.root_dir,
+            default_head_limit=tools_cfg.search_default_head_limit,
+            max_line_length=tools_cfg.search_max_line_length,
+            timeout_seconds=tools_cfg.search_timeout_seconds,
+        )
 
     def _run_command(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return execute_run_command(

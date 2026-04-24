@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import sys
 from typing import Any
 
 from rich.console import Console
@@ -25,6 +26,16 @@ from omni_cli.sot import (
 )
 from omni_cli.tools.core import ToolExecutionResult
 from omni_cli.tools import ToolRegistry
+
+
+# Streaming policy:
+# Whatever chunk the provider emits (reasoning, text, tool-call args) is
+# written to stdout VERBATIM. No regex cleaning, no cross-chunk dedup, no
+# concatenation heuristics. If the model emits weird spacing, that's the
+# model's output — surfacing it unmodified is the contract show_full honors.
+# Rich's Console.out is avoided for per-token streaming because it still
+# measures/pads/wraps each call and can inject spurious newlines between
+# small tokens; sys.stdout.write is the only truly transparent path.
 
 
 @dataclass(frozen=True)
@@ -55,20 +66,50 @@ class ConversationState:
 class StreamRenderState:
     reasoning_started: bool = False
     text_started: bool = False
+    # True when the stdout cursor is at column 0 (last visible char written
+    # was "\n", or nothing has been written yet). Tracked so that runtime
+    # meta output (e.g. the "tool_call:" header we print before a call) can
+    # guarantee exactly ONE fresh line — without stacking extra newlines on
+    # top of whatever trailing "\n" the provider already emitted inside the
+    # reasoning/text chunks. The chunks themselves are still written
+    # verbatim; only our own separator is conditional.
+    at_line_start: bool = True
 
 
-def _strip_reasoning_overlap(existing_text: str, incoming_text: str) -> str:
-    if not incoming_text:
-        return ""
+def _stream_chunk(state: StreamRenderState, text: str, ansi_prefix: str = "", ansi_suffix: str = "") -> None:
+    """Write a provider chunk verbatim (optionally wrapped in ANSI style).
 
-    if not existing_text:
-        return incoming_text
+    The ANSI wrapper is invisible in terms of cursor column, so the
+    at_line_start tracking is based on the raw `text` payload, not on the
+    wrapped bytes.
+    """
+    if not text:
+        return
+    sys.stdout.write(ansi_prefix + text + ansi_suffix)
+    sys.stdout.flush()
+    state.at_line_start = text.endswith("\n")
 
-    max_overlap = min(len(existing_text), len(incoming_text))
-    for overlap in range(max_overlap, 0, -1):
-        if existing_text.endswith(incoming_text[:overlap]):
-            return incoming_text[overlap:]
-    return incoming_text
+
+def _ensure_fresh_line(state: StreamRenderState) -> None:
+    """Emit a single "\n" only if the cursor is not already at column 0."""
+    if not state.at_line_start:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+        state.at_line_start = True
+
+
+def _write_meta(state: StreamRenderState, text: str, ends_on_newline: bool) -> None:
+    """Write runtime meta output (headers/separators) and update line-state.
+
+    Caller declares whether the literal payload ends on "\n". ANSI sequences
+    inside `text` do not affect cursor column, so the declaration only
+    reflects the plain-text tail.
+    """
+    if not text:
+        return
+    sys.stdout.write(text)
+    sys.stdout.flush()
+    state.at_line_start = ends_on_newline
 
 
 async def run_single_turn(
@@ -87,14 +128,14 @@ async def run_single_turn(
             text = str(event.payload.get("text", ""))
             details = event.payload.get("details") or []
             if text:
-                deduped_text = _strip_reasoning_overlap(result.reasoning, text)
-                if deduped_text:
-                    result.reasoning += deduped_text
-                    if show_thinking:
-                        if not render_state.reasoning_started:
-                            console.print("thinking:", style="dim", end=" ")
-                            render_state.reasoning_started = True
-                        console.print(deduped_text, style="dim", markup=False, end="")
+                result.reasoning += text
+                if show_thinking:
+                    if not render_state.reasoning_started:
+                        _write_meta(render_state, "\x1b[2mthinking:\x1b[0m ", ends_on_newline=False)
+                        render_state.reasoning_started = True
+                    # Verbatim: whatever the provider sent, print it as-is
+                    # inside the dim-style envelope. No regex, no dedup.
+                    _stream_chunk(render_state, text, ansi_prefix="\x1b[2m", ansi_suffix="\x1b[0m")
             if isinstance(details, list):
                 for detail in details:
                     if isinstance(detail, dict):
@@ -104,9 +145,12 @@ async def run_single_turn(
             result.text += text
             if text:
                 if show_thinking and render_state.reasoning_started and not render_state.text_started:
-                    console.out("\n\n")
+                    # At most one blank line between reasoning and final text,
+                    # regardless of how many trailing "\n" the reasoning carried.
+                    _ensure_fresh_line(render_state)
+                    _write_meta(render_state, "\n", ends_on_newline=True)
                 render_state.text_started = True
-                console.out(text, end="")
+                _stream_chunk(render_state, text)
         elif event.type == "tool_call":
             tool_calls = event.payload.get("tool_calls") or []
             result.tool_calls.extend(tool_calls)
@@ -118,9 +162,12 @@ async def run_single_turn(
                     args_chunk = func.get("arguments", "")
                     if name and index not in _tool_call_header_shown:
                         _tool_call_header_shown.add(index)
-                        console.print(f"\n[dim]tool_call: {name}([/dim]", end="")
+                        # Guarantee the header starts on a fresh line without
+                        # stacking on top of trailing newlines from reasoning.
+                        _ensure_fresh_line(render_state)
+                        _write_meta(render_state, f"\x1b[2mtool_call: {name}(\x1b[0m", ends_on_newline=False)
                     if args_chunk:
-                        console.out(args_chunk, end="")
+                        _stream_chunk(render_state, args_chunk)
         elif event.type == "usage":
             usage = event.payload.get("usage") or {}
             if isinstance(usage, dict):
@@ -130,9 +177,9 @@ async def run_single_turn(
             raise RuntimeError(str(event.payload.get("message", "Unknown provider error")))
 
     if show_full and _tool_call_header_shown:
-        console.print("[dim])[/dim]")
+        _write_meta(render_state, "\x1b[2m)\x1b[0m\n", ends_on_newline=True)
     if result.text or (show_thinking and render_state.reasoning_started):
-        console.out("\n")
+        _ensure_fresh_line(render_state)
 
     return result
 
@@ -907,15 +954,14 @@ async def _run_streaming_round(
             text = str(event.payload.get("text", ""))
             details = event.payload.get("details") or []
             if text:
-                current_reasoning = "".join(reasoning_parts)
-                deduped_text = _strip_reasoning_overlap(current_reasoning, text)
-                if deduped_text:
-                    reasoning_parts.append(deduped_text)
-                    if show_thinking:
-                        if not render_state.reasoning_started:
-                            console.print("thinking:", style="dim", end=" ")
-                            render_state.reasoning_started = True
-                        console.print(deduped_text, style="dim", markup=False, end="")
+                reasoning_parts.append(text)
+                if show_thinking:
+                    if not render_state.reasoning_started:
+                        _write_meta(render_state, "\x1b[2mthinking:\x1b[0m ", ends_on_newline=False)
+                        render_state.reasoning_started = True
+                    # Verbatim: whatever the provider sent, print it as-is
+                    # inside the dim-style envelope. No regex, no dedup.
+                    _stream_chunk(render_state, text, ansi_prefix="\x1b[2m", ansi_suffix="\x1b[0m")
             if isinstance(details, list):
                 for detail in details:
                     if isinstance(detail, dict):
@@ -924,10 +970,12 @@ async def _run_streaming_round(
             text = str(event.payload.get("text", ""))
             if text:
                 if show_thinking and render_state.reasoning_started and not render_state.text_started:
-                    console.out("\n\n")
+                    # At most one blank line between reasoning and final text.
+                    _ensure_fresh_line(render_state)
+                    _write_meta(render_state, "\n", ends_on_newline=True)
                 render_state.text_started = True
                 text_parts.append(text)
-                console.out(text, end="")
+                _stream_chunk(render_state, text)
         elif event.type == "tool_call":
             for tool_delta in event.payload.get("tool_calls") or []:
                 _merge_tool_call_delta(tool_state, tool_delta)
@@ -938,9 +986,10 @@ async def _run_streaming_round(
                     args_chunk = func.get("arguments", "")
                     if name and index not in _tool_call_header_shown:
                         _tool_call_header_shown.add(index)
-                        console.print(f"\n[dim]tool_call: {name}([/dim]", end="")
+                        _ensure_fresh_line(render_state)
+                        _write_meta(render_state, f"\x1b[2mtool_call: {name}(\x1b[0m", ends_on_newline=False)
                     if args_chunk:
-                        console.out(args_chunk, end="")
+                        _stream_chunk(render_state, args_chunk)
         elif event.type == "usage":
             event_usage = event.payload.get("usage") or {}
             if isinstance(event_usage, dict):
@@ -951,9 +1000,9 @@ async def _run_streaming_round(
     text = "".join(text_parts)
     tool_calls = [_finalize_tool_call(tool_state[index]) for index in sorted(tool_state)]
     if show_full and _tool_call_header_shown:
-        console.print("[dim])[/dim]")
+        _write_meta(render_state, "\x1b[2m)\x1b[0m\n", ends_on_newline=True)
     if text or (show_thinking and render_state.reasoning_started):
-        console.out("\n")
+        _ensure_fresh_line(render_state)
 
     assistant_message: dict[str, Any] = {"role": "assistant"}
     assistant_message["content"] = text if text else None

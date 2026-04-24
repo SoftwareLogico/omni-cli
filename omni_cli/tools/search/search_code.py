@@ -10,9 +10,9 @@ from typing import Any
 
 from omni_cli.constants import (
     VCS_DIRS,
-    SEARCH_DEFAULT_HEAD_LIMIT,
-    SEARCH_MAX_LINE_LENGTH,
-    SEARCH_TIMEOUT_SECONDS,
+    FALLBACK_SEARCH_DEFAULT_HEAD_LIMIT,
+    FALLBACK_SEARCH_MAX_LINE_LENGTH,
+    FALLBACK_SEARCH_TIMEOUT_SECONDS,
 )
 from omni_cli.tools.utils.path_helpers import resolve_path
 from omni_cli.tools.utils.validators import _require_string
@@ -105,6 +105,7 @@ def _python_search(
     context_after: int | None,
     context: int | None,
     multiline: bool,
+    max_line_length: int,
 ) -> list[str]:
     """Pure-Python grep fallback. Returns raw output lines similar to ripgrep."""
     flags = re.IGNORECASE if case_insensitive else 0
@@ -183,8 +184,8 @@ def _python_search(
                     for m in regex.finditer(content):
                         line_num = content[:m.start()].count("\n") + 1
                         matched_line = content[content.rfind("\n", 0, m.start()) + 1:content.find("\n", m.end())]
-                        if len(matched_line) > SEARCH_MAX_LINE_LENGTH:
-                            matched_line = matched_line[:SEARCH_MAX_LINE_LENGTH]
+                        if len(matched_line) > max_line_length:
+                            matched_line = matched_line[:max_line_length]
                         if show_line_numbers:
                             results.append(f"{rel_path}:{line_num}:{matched_line}")
                         else:
@@ -221,8 +222,8 @@ def _python_search(
                 if idx > prev_idx + 1 and prev_idx >= 0:
                     results.append("--")  # separator like ripgrep
                 line_text = lines[idx]
-                if len(line_text) > SEARCH_MAX_LINE_LENGTH:
-                    line_text = line_text[:SEARCH_MAX_LINE_LENGTH]
+                if len(line_text) > max_line_length:
+                    line_text = line_text[:max_line_length]
                 if show_line_numbers:
                     sep = ":" if idx in match_indices else "-"
                     results.append(f"{rel_path}{sep}{idx + 1}{sep}{line_text}")
@@ -237,8 +238,21 @@ def _python_search(
 # Main entry point
 # ---------------------------------------------------------------------------
 
-def execute_search_code(arguments: dict[str, Any], root_dir: Path) -> dict[str, Any]:
-    """Search for text patterns across files using ripgrep (or Python fallback)."""
+def execute_search_code(
+    arguments: dict[str, Any],
+    root_dir: Path,
+    *,
+    default_head_limit: int = FALLBACK_SEARCH_DEFAULT_HEAD_LIMIT,
+    max_line_length: int = FALLBACK_SEARCH_MAX_LINE_LENGTH,
+    timeout_seconds: int = FALLBACK_SEARCH_TIMEOUT_SECONDS,
+) -> dict[str, Any]:
+    """Search for text patterns across files using ripgrep (or Python fallback).
+
+    The three keyword-only settings (`default_head_limit`, `max_line_length`,
+    `timeout_seconds`) are authoritative values taken from `[tools]` in
+    `omni.toml`; the `FALLBACK_SEARCH_*` constants are kept only for direct
+    library usage or tests that bypass the registry.
+    """
     pattern = _require_string(arguments, "pattern")
     raw_path = arguments.get("path")
     glob_filter = arguments.get("glob")
@@ -264,6 +278,7 @@ def execute_search_code(arguments: dict[str, Any], root_dir: Path) -> dict[str, 
             case_insensitive=case_insensitive, show_line_numbers=show_line_numbers,
             context_before=context_before, context_after=context_after,
             context=context, multiline=multiline,
+            max_line_length=max_line_length, timeout_seconds=timeout_seconds,
         )
     else:
         raw_lines = _python_search(
@@ -272,13 +287,14 @@ def execute_search_code(arguments: dict[str, Any], root_dir: Path) -> dict[str, 
             case_insensitive=case_insensitive, show_line_numbers=show_line_numbers,
             context_before=context_before, context_after=context_after,
             context=context, multiline=multiline,
+            max_line_length=max_line_length,
         )
 
     root_str = str(search_path)
     if not root_str.endswith("/") and not root_str.endswith("\\"):
         root_str += "/"
 
-    effective_limit = head_limit if head_limit is not None else SEARCH_DEFAULT_HEAD_LIMIT
+    effective_limit = head_limit if head_limit is not None else default_head_limit
     if effective_limit == 0:
         limited = raw_lines[offset:]
         was_truncated = False
@@ -348,6 +364,8 @@ def _search_with_ripgrep(
     context_after: int | None,
     context: int | None,
     multiline: bool,
+    max_line_length: int,
+    timeout_seconds: int,
 ) -> list[str]:
     """Run ripgrep and return raw output lines."""
     args: list[str] = [rg_bin, "--hidden"]
@@ -355,7 +373,7 @@ def _search_with_ripgrep(
     for d in VCS_DIRS:
         args.extend(["--glob", f"!{d}"])
 
-    args.extend(["--max-columns", str(SEARCH_MAX_LINE_LENGTH)])
+    args.extend(["--max-columns", str(max_line_length)])
 
     if multiline:
         args.extend(["-U", "--multiline-dotall"])
@@ -402,13 +420,13 @@ def _search_with_ripgrep(
 
     try:
         proc = subprocess.run(
-            args, capture_output=True, text=True, timeout=SEARCH_TIMEOUT_SECONDS,
+            args, capture_output=True, text=True, timeout=timeout_seconds,
         )
     except FileNotFoundError:
         raise RuntimeError("ripgrep binary not found at resolved path")
     except subprocess.TimeoutExpired:
         raise RuntimeError(
-            f"search timed out after {SEARCH_TIMEOUT_SECONDS}s. "
+            f"search timed out after {timeout_seconds}s. "
             "Try a narrower pattern, glob filter, or smaller search path."
         )
 

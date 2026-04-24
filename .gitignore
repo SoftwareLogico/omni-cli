@@ -15,3 +15,6 @@ omni.keys.toml
 .omni-cli/
 uv.lock
 omni_cli.egg-info/
+
+# Temporary scripts
+temp_scripts/*

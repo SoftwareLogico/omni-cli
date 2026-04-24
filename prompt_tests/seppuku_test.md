@@ -1,0 +1,1 @@
+<content of seppuku_test.md>
