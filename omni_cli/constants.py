@@ -71,6 +71,12 @@ FALLBACK_DELEGATED_REPEAT_LIMIT = 2
 FALLBACK_SEARCH_DEFAULT_HEAD_LIMIT = 200
 FALLBACK_SEARCH_MAX_LINE_LENGTH = 500
 FALLBACK_SEARCH_TIMEOUT_SECONDS = 30
+# Hard cap on streamed reasoning/thinking characters per turn.
+# If the model's reasoning channel exceeds this budget without emitting
+# a final answer or tool call, the stream is cut and the round advances.
+# Set to 0 to disable the cap.
+FALLBACK_REASONING_CHAR_BUDGET = 8000
+FALLBACK_DELEGATED_REASONING_CHAR_BUDGET = 4000
 
 # ── Tools that mutate the session (trigger SoT/session refresh) ──
 SESSION_MUTATION_TOOLS = {

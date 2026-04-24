@@ -9,7 +9,9 @@ from rich.console import Console
 
 from omni_cli.constants import (
     FALLBACK_DELEGATED_MAX_ROUNDS,
+    FALLBACK_DELEGATED_REASONING_CHAR_BUDGET,
     FALLBACK_DELEGATED_REPEAT_LIMIT,
+    FALLBACK_REASONING_CHAR_BUDGET,
     FALLBACK_REPEAT_LIMIT,
     SESSION_MUTATION_TOOLS,
 )
@@ -118,64 +120,82 @@ async def run_single_turn(
     console: Console,
     show_thinking: bool = True,
     show_full: bool = True,
+    reasoning_char_budget: int = 0,
 ) -> TurnResult:
     result = TurnResult()
     render_state = StreamRenderState()
     _tool_call_header_shown: set[int] = set()
+    reasoning_chars = 0
+    reasoning_budget_tripped = False
 
-    async for event in adapter.stream_turn(request):
-        if event.type == "reasoning_delta":
-            text = str(event.payload.get("text", ""))
-            details = event.payload.get("details") or []
-            if text:
-                result.reasoning += text
-                if show_thinking:
-                    if not render_state.reasoning_started:
-                        _write_meta(render_state, "\x1b[2mthinking:\x1b[0m ", ends_on_newline=False)
-                        render_state.reasoning_started = True
-                    # Verbatim: whatever the provider sent, print it as-is
-                    # inside the dim-style envelope. No regex, no dedup.
-                    _stream_chunk(render_state, text, ansi_prefix="\x1b[2m", ansi_suffix="\x1b[0m")
-            if isinstance(details, list):
-                for detail in details:
-                    if isinstance(detail, dict):
-                        result.reasoning_details.append(detail)
-        elif event.type == "text_delta":
-            text = str(event.payload.get("text", ""))
-            result.text += text
-            if text:
-                if show_thinking and render_state.reasoning_started and not render_state.text_started:
-                    # At most one blank line between reasoning and final text,
-                    # regardless of how many trailing "\n" the reasoning carried.
-                    _ensure_fresh_line(render_state)
-                    _write_meta(render_state, "\n", ends_on_newline=True)
-                render_state.text_started = True
-                _stream_chunk(render_state, text)
-        elif event.type == "tool_call":
-            tool_calls = event.payload.get("tool_calls") or []
-            result.tool_calls.extend(tool_calls)
-            if show_full:
-                for tool_delta in tool_calls:
-                    index = int(tool_delta.get("index", 0))
-                    func = tool_delta.get("function") or {}
-                    name = func.get("name", "")
-                    args_chunk = func.get("arguments", "")
-                    if name and index not in _tool_call_header_shown:
-                        _tool_call_header_shown.add(index)
-                        # Guarantee the header starts on a fresh line without
-                        # stacking on top of trailing newlines from reasoning.
+    stream = adapter.stream_turn(request)
+    try:
+        async for event in stream:
+            if event.type == "reasoning_delta":
+                text = str(event.payload.get("text", ""))
+                details = event.payload.get("details") or []
+                if text:
+                    result.reasoning += text
+                    reasoning_chars += len(text)
+                    if show_thinking:
+                        if not render_state.reasoning_started:
+                            _write_meta(render_state, "\x1b[2mthinking:\x1b[0m ", ends_on_newline=False)
+                            render_state.reasoning_started = True
+                        # Verbatim: whatever the provider sent, print it as-is
+                        # inside the dim-style envelope. No regex, no dedup.
+                        _stream_chunk(render_state, text, ansi_prefix="\x1b[2m", ansi_suffix="\x1b[0m")
+                if isinstance(details, list):
+                    for detail in details:
+                        if isinstance(detail, dict):
+                            result.reasoning_details.append(detail)
+                if reasoning_char_budget and reasoning_chars >= reasoning_char_budget:
+                    reasoning_budget_tripped = True
+                    break
+            elif event.type == "text_delta":
+                text = str(event.payload.get("text", ""))
+                result.text += text
+                if text:
+                    if show_thinking and render_state.reasoning_started and not render_state.text_started:
+                        # At most one blank line between reasoning and final text,
+                        # regardless of how many trailing "\n" the reasoning carried.
                         _ensure_fresh_line(render_state)
-                        _write_meta(render_state, f"\x1b[2mtool_call: {name}(\x1b[0m", ends_on_newline=False)
-                    if args_chunk:
-                        _stream_chunk(render_state, args_chunk)
-        elif event.type == "usage":
-            usage = event.payload.get("usage") or {}
-            if isinstance(usage, dict):
-                _replace_usage_snapshot(result.usage, usage)
-                _store_latest_usage_snapshot(result.usage, usage)
-        elif event.type == "error":
-            raise RuntimeError(str(event.payload.get("message", "Unknown provider error")))
+                        _write_meta(render_state, "\n", ends_on_newline=True)
+                    render_state.text_started = True
+                    _stream_chunk(render_state, text)
+            elif event.type == "tool_call":
+                tool_calls = event.payload.get("tool_calls") or []
+                result.tool_calls.extend(tool_calls)
+                if show_full:
+                    for tool_delta in tool_calls:
+                        index = int(tool_delta.get("index", 0))
+                        func = tool_delta.get("function") or {}
+                        name = func.get("name", "")
+                        args_chunk = func.get("arguments", "")
+                        if name and index not in _tool_call_header_shown:
+                            _tool_call_header_shown.add(index)
+                            # Guarantee the header starts on a fresh line without
+                            # stacking on top of trailing newlines from reasoning.
+                            _ensure_fresh_line(render_state)
+                            _write_meta(render_state, f"\x1b[2mtool_call: {name}(\x1b[0m", ends_on_newline=False)
+                        if args_chunk:
+                            _stream_chunk(render_state, args_chunk)
+            elif event.type == "usage":
+                usage = event.payload.get("usage") or {}
+                if isinstance(usage, dict):
+                    _replace_usage_snapshot(result.usage, usage)
+                    _store_latest_usage_snapshot(result.usage, usage)
+            elif event.type == "error":
+                raise RuntimeError(str(event.payload.get("message", "Unknown provider error")))
+    finally:
+        await stream.aclose()
 
+    if reasoning_budget_tripped:
+        _ensure_fresh_line(render_state)
+        _write_meta(
+            render_state,
+            f"\x1b[33m⚠  reasoning budget exceeded ({reasoning_chars} chars ≥ {reasoning_char_budget}); stream cut, continuing.\x1b[0m\n",
+            ends_on_newline=True,
+        )
     if show_full and _tool_call_header_shown:
         _write_meta(render_state, "\x1b[2m)\x1b[0m\n", ends_on_newline=True)
     if result.text or (show_thinking and render_state.reasoning_started):
@@ -228,6 +248,11 @@ async def run_tool_loop(
             console,
             show_thinking=runtime.config.tools.show_thinking,
             show_full=runtime.config.tools.show_full,
+            reasoning_char_budget=_effective_reasoning_char_budget(
+                request,
+                runtime.config.tools.reasoning_char_budget,
+                runtime.config.tools.delegated_reasoning_char_budget,
+            ),
         )
         # SoT Step 6: Clean — save assistant response to permanent history
         assistant_message = {"role": "assistant", "content": turn_result.text}
@@ -292,6 +317,11 @@ async def run_tool_loop(
                 console,
                 show_thinking=runtime.config.tools.show_thinking,
                 show_full=runtime.config.tools.show_full,
+                reasoning_char_budget=_effective_reasoning_char_budget(
+                    request,
+                    runtime.config.tools.reasoning_char_budget,
+                    runtime.config.tools.delegated_reasoning_char_budget,
+                ),
             )
         else:
             completion = await adapter.complete_turn(round_request)
@@ -454,6 +484,21 @@ def _repeat_round_limit(
     if request.disable_delegation:
         return delegated_limit
     return main_limit
+
+
+def _effective_reasoning_char_budget(
+    request: ProviderRequest,
+    boss_budget: int = FALLBACK_REASONING_CHAR_BUDGET,
+    delegated_budget: int = FALLBACK_DELEGATED_REASONING_CHAR_BUDGET,
+) -> int:
+    """Return the reasoning-char cap that applies to this request.
+
+    Returns 0 when the cap is disabled (either side set to 0).
+    Sub-agents get the (usually tighter) delegated budget.
+    """
+    if request.disable_delegation:
+        return delegated_budget
+    return boss_budget
 
 
 def _build_tool_call_signature(tool_call: dict[str, Any]) -> str:
@@ -940,6 +985,7 @@ async def _run_streaming_round(
     console: Console,
     show_thinking: bool = True,
     show_full: bool = True,
+    reasoning_char_budget: int = 0,
 ):
     text_parts: list[str] = []
     reasoning_parts: list[str] = []
@@ -948,57 +994,74 @@ async def _run_streaming_round(
     tool_state: dict[int, dict[str, Any]] = {}
     render_state = StreamRenderState()
     _tool_call_header_shown: set[int] = set()
+    reasoning_chars = 0
+    reasoning_budget_tripped = False
 
-    async for event in adapter.stream_turn(request):
-        if event.type == "reasoning_delta":
-            text = str(event.payload.get("text", ""))
-            details = event.payload.get("details") or []
-            if text:
-                reasoning_parts.append(text)
-                if show_thinking:
-                    if not render_state.reasoning_started:
-                        _write_meta(render_state, "\x1b[2mthinking:\x1b[0m ", ends_on_newline=False)
-                        render_state.reasoning_started = True
-                    # Verbatim: whatever the provider sent, print it as-is
-                    # inside the dim-style envelope. No regex, no dedup.
-                    _stream_chunk(render_state, text, ansi_prefix="\x1b[2m", ansi_suffix="\x1b[0m")
-            if isinstance(details, list):
-                for detail in details:
-                    if isinstance(detail, dict):
-                        reasoning_details.append(detail)
-        elif event.type == "text_delta":
-            text = str(event.payload.get("text", ""))
-            if text:
-                if show_thinking and render_state.reasoning_started and not render_state.text_started:
-                    # At most one blank line between reasoning and final text.
-                    _ensure_fresh_line(render_state)
-                    _write_meta(render_state, "\n", ends_on_newline=True)
-                render_state.text_started = True
-                text_parts.append(text)
-                _stream_chunk(render_state, text)
-        elif event.type == "tool_call":
-            for tool_delta in event.payload.get("tool_calls") or []:
-                _merge_tool_call_delta(tool_state, tool_delta)
-                if show_full:
-                    index = int(tool_delta.get("index", 0))
-                    func = tool_delta.get("function") or {}
-                    name = func.get("name", "")
-                    args_chunk = func.get("arguments", "")
-                    if name and index not in _tool_call_header_shown:
-                        _tool_call_header_shown.add(index)
+    stream = adapter.stream_turn(request)
+    try:
+        async for event in stream:
+            if event.type == "reasoning_delta":
+                text = str(event.payload.get("text", ""))
+                details = event.payload.get("details") or []
+                if text:
+                    reasoning_parts.append(text)
+                    reasoning_chars += len(text)
+                    if show_thinking:
+                        if not render_state.reasoning_started:
+                            _write_meta(render_state, "\x1b[2mthinking:\x1b[0m ", ends_on_newline=False)
+                            render_state.reasoning_started = True
+                        # Verbatim: whatever the provider sent, print it as-is
+                        # inside the dim-style envelope. No regex, no dedup.
+                        _stream_chunk(render_state, text, ansi_prefix="\x1b[2m", ansi_suffix="\x1b[0m")
+                if isinstance(details, list):
+                    for detail in details:
+                        if isinstance(detail, dict):
+                            reasoning_details.append(detail)
+                if reasoning_char_budget and reasoning_chars >= reasoning_char_budget:
+                    reasoning_budget_tripped = True
+                    break
+            elif event.type == "text_delta":
+                text = str(event.payload.get("text", ""))
+                if text:
+                    if show_thinking and render_state.reasoning_started and not render_state.text_started:
+                        # At most one blank line between reasoning and final text.
                         _ensure_fresh_line(render_state)
-                        _write_meta(render_state, f"\x1b[2mtool_call: {name}(\x1b[0m", ends_on_newline=False)
-                    if args_chunk:
-                        _stream_chunk(render_state, args_chunk)
-        elif event.type == "usage":
-            event_usage = event.payload.get("usage") or {}
-            if isinstance(event_usage, dict):
-                _replace_usage_snapshot(usage, event_usage)
-        elif event.type == "error":
-            raise RuntimeError(str(event.payload.get("message", "Unknown provider error")))
+                        _write_meta(render_state, "\n", ends_on_newline=True)
+                    render_state.text_started = True
+                    text_parts.append(text)
+                    _stream_chunk(render_state, text)
+            elif event.type == "tool_call":
+                for tool_delta in event.payload.get("tool_calls") or []:
+                    _merge_tool_call_delta(tool_state, tool_delta)
+                    if show_full:
+                        index = int(tool_delta.get("index", 0))
+                        func = tool_delta.get("function") or {}
+                        name = func.get("name", "")
+                        args_chunk = func.get("arguments", "")
+                        if name and index not in _tool_call_header_shown:
+                            _tool_call_header_shown.add(index)
+                            _ensure_fresh_line(render_state)
+                            _write_meta(render_state, f"\x1b[2mtool_call: {name}(\x1b[0m", ends_on_newline=False)
+                        if args_chunk:
+                            _stream_chunk(render_state, args_chunk)
+            elif event.type == "usage":
+                event_usage = event.payload.get("usage") or {}
+                if isinstance(event_usage, dict):
+                    _replace_usage_snapshot(usage, event_usage)
+            elif event.type == "error":
+                raise RuntimeError(str(event.payload.get("message", "Unknown provider error")))
+    finally:
+        await stream.aclose()
 
     text = "".join(text_parts)
     tool_calls = [_finalize_tool_call(tool_state[index]) for index in sorted(tool_state)]
+    if reasoning_budget_tripped:
+        _ensure_fresh_line(render_state)
+        _write_meta(
+            render_state,
+            f"\x1b[33m⚠  reasoning budget exceeded ({reasoning_chars} chars ≥ {reasoning_char_budget}); stream cut, continuing.\x1b[0m\n",
+            ends_on_newline=True,
+        )
     if show_full and _tool_call_header_shown:
         _write_meta(render_state, "\x1b[2m)\x1b[0m\n", ends_on_newline=True)
     if text or (show_thinking and render_state.reasoning_started):

@@ -212,6 +212,7 @@ All runtime settings live in `omni.toml` under `[tools]`. In a nutshell:
 - **Output & detection:** `output_limit`, `binary_check_size`, `default_command_timeout_seconds`.
 - **Streaming visibility:** `show_thinking` (model reasoning), `show_full` (tool call arguments in real time).
 - **Loop limits:** `max_rounds` (boss), `delegated_max_rounds` (sub-agent), `repeat_limit` / `delegated_repeat_limit` (abort on identical consecutive rounds).
+- **Reasoning budget:** `reasoning_char_budget` (boss), `delegated_reasoning_char_budget` (sub-agent) — hard cap on streamed reasoning characters per turn; cuts the stream when exceeded so a model stuck in endless thinking can't hang the loop. Set to `0` to disable.
 
 For the full reference table with defaults and descriptions, see [ARCHITECTURE.md](ARCHITECTURE.md#session-and-config-notes-for-orchestration).
 

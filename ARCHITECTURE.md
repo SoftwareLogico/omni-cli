@@ -124,6 +124,8 @@ All runtime tool settings live in `[tools]` inside `omni.toml`:
 | `search_default_head_limit` | `200` | Default max number of result entries returned by a single `search_code` call when the model does not pass an explicit `head_limit`. Pass `0` from the tool call to disable. |
 | `search_max_line_length` | `500` | Per-line truncation length (characters) applied to `search_code` output. Controls both the ripgrep `--max-columns` flag and the Python fallback slicing. |
 | `search_timeout_seconds` | `30` | Hard timeout (in seconds) for a single `search_code` invocation (ripgrep subprocess or Python fallback). Keeps pathological patterns from hanging a turn. |
+| `reasoning_char_budget` | `8000` | Hard cap on streamed reasoning/thinking characters per turn for the boss agent. When the cumulative reasoning channel exceeds this budget during a single stream, the runtime cuts the provider connection, prints a yellow `⚠  reasoning budget exceeded` warning, and lets the tool loop advance. Protects against models that get stuck in eternal "let me reconsider…" loops inside a single response. Set to `0` to disable the cap. |
+| `delegated_reasoning_char_budget` | `4000` | Same cap applied to sub-agent turns. Typically smaller than the boss budget because delegated workers are expected to execute narrow tasks and should not spend long reasoning windows before acting. Set to `0` to disable. |
 
 ## File Discovery Tool (`list_dir`)
 

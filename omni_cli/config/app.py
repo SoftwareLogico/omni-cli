@@ -54,6 +54,8 @@ class ToolConfig:
     search_default_head_limit: int = 200
     search_max_line_length: int = 500
     search_timeout_seconds: int = 30
+    reasoning_char_budget: int = 8000
+    delegated_reasoning_char_budget: int = 4000
 
 
 @dataclass
@@ -227,6 +229,14 @@ def _parse_app_config(raw: dict[str, Any], keys_raw: dict[str, Any] | None = Non
             search_timeout_seconds=_parse_positive_int(
                 tools_raw.get("search_timeout_seconds", 30),
                 "tools.search_timeout_seconds",
+            ),
+            reasoning_char_budget=_parse_non_negative_int(
+                tools_raw.get("reasoning_char_budget", 8000),
+                "tools.reasoning_char_budget",
+            ),
+            delegated_reasoning_char_budget=_parse_non_negative_int(
+                tools_raw.get("delegated_reasoning_char_budget", 4000),
+                "tools.delegated_reasoning_char_budget",
             ),
         ),
         mcp_servers=mcp_servers,

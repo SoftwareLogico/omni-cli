@@ -21,6 +21,8 @@ delegated_repeat_limit = 2       # max consecutive identical rounds before abort
 search_default_head_limit = 200  # default max result entries returned by search_code
 search_max_line_length = 500     # per-line truncation length inside search_code output
 search_timeout_seconds = 30      # ripgrep/python-fallback timeout for a single search_code call
+reasoning_char_budget = 8000              # hard cap on streamed reasoning chars per turn (boss); 0 disables
+delegated_reasoning_char_budget = 4000    # same cap for sub-agent turns; 0 disables
 
 [providers.lmstudio]
 base_url = "http://192.168.1.XXX:1234/v1"
