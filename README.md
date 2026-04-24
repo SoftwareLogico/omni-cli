@@ -86,7 +86,7 @@
 
    [providers.nvidia]
    base_url = "https://integrate.api.nvidia.com/v1"
-   model = "z-ai/glm-5.1"
+   model = "qwen/qwen3-coder-480b-a35b-instruct"
    temperature = 1
    max_output_tokens = 16384
    ```
