@@ -4,6 +4,7 @@ import mimetypes
 import os
 import platform
 import socket
+import subprocess
 import getpass
 import sys
 from datetime import datetime
@@ -11,7 +12,7 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
 
-from omni_cli.config.prompts import AGENT_SYSTEM_PROMPT, JB_SYSTEM_PROMPT, RUNTIME_RULES, SUB_AGENT_SYSTEM_PROMPT
+from omni_cli.config.prompts import AGENT_SYSTEM_PROMPT, JB_SYSTEM_PROMPT, SUB_AGENT_SYSTEM_PROMPT
 from omni_cli.constants import SOT_MARKER
 from omni_cli.utils.text import _count_lines
 
@@ -26,7 +27,6 @@ def build_orchestration_rules(is_sub_agent: bool = False) -> str:
         parts.append(SUB_AGENT_SYSTEM_PROMPT.strip())
     else:
         parts.append(AGENT_SYSTEM_PROMPT.strip())
-    parts.append(RUNTIME_RULES.strip())
     # Append host environment block (best-effort) so payloads always include it
     host_context = build_host_environment_prompt()
     if host_context:
@@ -270,3 +270,113 @@ def _build_media_intro_text(path: str, parts: list[dict[str, Any]]) -> str:
     if not metadata:
         return original_text
     return f"{original_text} meta: {'; '.join(metadata)}"
+
+
+def detect_launch_context() -> dict[str, Any]:
+    """Best-effort detection of how omni-cli was launched.
+
+    Returns a dict with:
+      - argv: list[str] - raw sys.argv (script + args)
+      - runner: str | None - inferred runner name (uv, conda, poetry, pipenv, venv)
+      - runner_detail: str | None - short human description (e.g., "uv run", "conda env 'omni'")
+      - parent_cmdline: str | None - parent process command line (Unix only; skipped on Windows to avoid latency)
+      - python_executable: str - resolved path to the running python interpreter
+    """
+    argv = list(sys.argv)
+
+    runner: str | None = None
+    runner_detail: str | None = None
+
+    if os.environ.get("UV") or os.environ.get("UV_PROJECT_ROOT") or os.environ.get("UV_PROJECT_ENVIRONMENT"):
+        runner = "uv"
+        runner_detail = "uv run"
+    elif os.environ.get("POETRY_ACTIVE") == "1":
+        runner = "poetry"
+        runner_detail = "poetry run"
+    elif os.environ.get("PIPENV_ACTIVE") == "1":
+        runner = "pipenv"
+        runner_detail = "pipenv run"
+    elif os.environ.get("CONDA_DEFAULT_ENV"):
+        env_name = os.environ.get("CONDA_DEFAULT_ENV") or ""
+        runner = "conda"
+        runner_detail = f"conda env '{env_name}'" if env_name else "conda"
+    elif os.environ.get("VIRTUAL_ENV"):
+        runner = "venv"
+        venv_path = os.environ.get("VIRTUAL_ENV") or ""
+        runner_detail = f"venv ({venv_path})" if venv_path else "venv"
+
+    parent_cmdline: str | None = None
+    system_name = platform.system().lower()
+    if system_name != "windows":
+        try:
+            ppid = os.getppid()
+            completed = subprocess.run(
+                ["ps", "-o", "args=", "-p", str(ppid)],
+                capture_output=True,
+                text=True,
+                timeout=1.0,
+            )
+            if completed.returncode == 0:
+                line = completed.stdout.strip()
+                if line:
+                    parent_cmdline = line
+        except Exception:
+            parent_cmdline = None
+
+    try:
+        python_executable = os.path.realpath(sys.executable)
+    except Exception:
+        python_executable = sys.executable or ""
+
+    return {
+        "argv": argv,
+        "runner": runner,
+        "runner_detail": runner_detail,
+        "parent_cmdline": parent_cmdline,
+        "python_executable": python_executable,
+    }
+
+
+def build_previous_turn_metadata_message(metadata: dict[str, Any]) -> dict[str, Any] | None:
+    """Build a single-line CURRENT METADATA user message from the previous turn's stats.
+
+    Input metadata is a flat dict of label -> scalar value, plus an optional
+    'launch_context' dict (as produced by detect_launch_context). Returns a
+    message dict {"role": "user", "content": "..."} or None if nothing useful.
+    """
+    if not metadata:
+        return None
+
+    pairs: list[str] = []
+    for key, value in metadata.items():
+        if key == "launch_context":
+            continue
+        if value is None or value == "":
+            continue
+        pairs.append(f"{key}: {value}")
+
+    launch = metadata.get("launch_context")
+    if isinstance(launch, dict):
+        argv = launch.get("argv") or []
+        argv_str = " ".join(str(a) for a in argv) if argv else ""
+        runner_detail = launch.get("runner_detail")
+        parent = launch.get("parent_cmdline")
+        pyexe = launch.get("python_executable")
+
+        if parent:
+            pairs.append(f"Launch: {parent}")
+        elif runner_detail and argv_str:
+            pairs.append(f"Launch: {runner_detail} -> {argv_str}")
+        elif runner_detail:
+            pairs.append(f"Launch: {runner_detail}")
+        elif argv_str:
+            pairs.append(f"Launch: {argv_str}")
+
+        if pyexe:
+            pairs.append(f"Python: {pyexe}")
+
+    if not pairs:
+        return None
+
+    content = "=== CURRENT METADATA ===\n" + "; ".join(pairs) + "\n=== END CURRENT METADATA ==="
+    return {"role": "user", "content": content}

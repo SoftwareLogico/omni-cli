@@ -6,6 +6,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -121,6 +122,69 @@ def _send_signal_to_command_group(pid: int, signum: int) -> None:
             os.killpg(pid, signum)
     except ProcessLookupError:
         return
+
+
+# -----------------------------------------------------------------------------
+# Foreground interrupt plumbing
+# -----------------------------------------------------------------------------
+# The CLI installs a SIGINT handler that, on Ctrl+C, first calls
+# `try_interrupt_active_foreground()` to stop a stuck foreground run_command
+# *without* cancelling the agent's turn. The set below tracks every live
+# foreground Popen so the handler can terminate them. Every foreground child
+# is started in its own session (Unix) or process group (Windows) so TTY
+# Ctrl+C no longer reaches the child directly — the decision to kill is
+# routed through our handler explicitly.
+# -----------------------------------------------------------------------------
+_active_fg_procs: set["subprocess.Popen[bytes]"] = set()
+_active_fg_lock = threading.Lock()
+_interrupted_fg_pids: set[int] = set()
+
+
+def _register_active_foreground(proc: "subprocess.Popen[bytes]") -> None:
+    with _active_fg_lock:
+        _active_fg_procs.add(proc)
+
+
+def _unregister_active_foreground(proc: "subprocess.Popen[bytes]") -> None:
+    with _active_fg_lock:
+        _active_fg_procs.discard(proc)
+
+
+def _consume_interrupted_flag(pid: int) -> bool:
+    with _active_fg_lock:
+        if pid in _interrupted_fg_pids:
+            _interrupted_fg_pids.discard(pid)
+            return True
+        return False
+
+
+def try_interrupt_active_foreground() -> bool:
+    """Signal all live foreground run_command children to terminate.
+
+    Designed to be called from a SIGINT handler. Sends SIGTERM (Unix) or
+    CTRL_BREAK_EVENT (Windows) to each child's process group. Returns True
+    if at least one child was signaled, False if nothing was active.
+
+    Callers should interpret True as "Ctrl+C was consumed by the foreground
+    interrupt; do NOT also cancel the turn."
+    """
+    with _active_fg_lock:
+        if not _active_fg_procs:
+            return False
+        if os.name == "nt":
+            sig = getattr(signal, "CTRL_BREAK_EVENT", signal.SIGTERM)
+        else:
+            sig = signal.SIGTERM
+        procs_snapshot = list(_active_fg_procs)
+        for proc in procs_snapshot:
+            _interrupted_fg_pids.add(proc.pid)
+    # Signal outside the lock so a slow kill does not block other callers.
+    for proc in procs_snapshot:
+        try:
+            _send_signal_to_command_group(proc.pid, sig)
+        except Exception:
+            pass
+    return True
 
 
 def _wait_for_supervisor_update(metadata_path: Path, supervisor_pid: Any, timeout_seconds: float) -> dict[str, Any]:
@@ -276,24 +340,64 @@ def _run_command_foreground(
     output_limit: int,
     stdin_bytes: bytes | None = None,
 ) -> dict[str, Any]:
+    # Build the child in a separate session/process group so Ctrl+C from the
+    # terminal only reaches the omni-cli process — the decision to propagate
+    # it to the child is routed explicitly through try_interrupt_active_foreground().
+    popen_kwargs: dict[str, Any] = {
+        "cwd": str(cwd),
+        "stdin": subprocess.PIPE if stdin_bytes is not None else subprocess.DEVNULL,
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+    }
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        popen_kwargs["start_new_session"] = True
+
+    proc: "subprocess.Popen[bytes]" = subprocess.Popen(process_args, **popen_kwargs)
+    _register_active_foreground(proc)
+
+    timed_out = False
+    stdout_bytes = b""
+    stderr_bytes = b""
     try:
-        completed = subprocess.run(
-            process_args,
-            cwd=str(cwd),
-            input=stdin_bytes,
-            capture_output=True,
-            text=False,
-            timeout=timeout_seconds,
-        )
-        stdout_bytes = completed.stdout or b""
-        stderr_bytes = completed.stderr or b""
+        try:
+            stdout_bytes, stderr_bytes = proc.communicate(
+                input=stdin_bytes,
+                timeout=timeout_seconds,
+            )
+        except subprocess.TimeoutExpired as exc:
+            # Harvest whatever was captured before the timeout fired.
+            stdout_bytes = exc.stdout or b""
+            stderr_bytes = exc.stderr or b""
+            timed_out = True
+            # Escalate: try SIGTERM on the group first, then SIGKILL if needed.
+            _send_signal_to_command_group(proc.pid, signal.SIGTERM)
+            try:
+                extra_out, extra_err = proc.communicate(timeout=5)
+                stdout_bytes += extra_out or b""
+                stderr_bytes += extra_err or b""
+            except subprocess.TimeoutExpired:
+                kill_signal = signal.SIGKILL if hasattr(signal, "SIGKILL") else signal.SIGTERM
+                _send_signal_to_command_group(proc.pid, kill_signal)
+                try:
+                    extra_out, extra_err = proc.communicate()
+                    stdout_bytes += extra_out or b""
+                    stderr_bytes += extra_err or b""
+                except Exception:
+                    pass
+    finally:
+        _unregister_active_foreground(proc)
+
+    # Interrupted-by-user wins over timed_out: if the SIGINT handler killed the
+    # child, communicate() would have returned normally (pipes closed on exit),
+    # not via TimeoutExpired, so interrupted=True will arrive with timed_out=False
+    # in the common case.
+    interrupted_by_user = _consume_interrupted_flag(proc.pid)
+    if interrupted_by_user:
         timed_out = False
-        exit_code: int | None = completed.returncode
-    except subprocess.TimeoutExpired as exc:
-        stdout_bytes = exc.stdout or b""
-        stderr_bytes = exc.stderr or b""
-        timed_out = True
-        exit_code = None
+
+    exit_code: int | None = proc.returncode if not timed_out else None
 
     stdout_text = _decode_command_output(stdout_bytes)
     stderr_text = _decode_command_output(stderr_bytes)
@@ -303,18 +407,26 @@ def _run_command_foreground(
     artifact_paths["stderr_path"].write_bytes(stderr_bytes)
     artifact_paths["combined_output_path"].write_text(combined_text, encoding="utf-8")
 
+    if interrupted_by_user:
+        status = COMMAND_STATUS_STOPPED
+    elif timed_out:
+        status = COMMAND_STATUS_FAILED
+    elif exit_code == 0:
+        status = COMMAND_STATUS_COMPLETED
+    else:
+        status = COMMAND_STATUS_FAILED
+
     metadata = {
         "command_id": artifact_paths["command_id"],
         "mode": "foreground",
-        "status": COMMAND_STATUS_COMPLETED if not timed_out and exit_code == 0 else (
-            COMMAND_STATUS_FAILED if not timed_out else COMMAND_STATUS_FAILED
-        ),
+        "status": status,
         "command": command,
         "cwd": str(cwd),
         "started_at": artifact_paths["started_at"],
         "completed_at": _utc_now_iso(),
         "timeout_seconds": timeout_seconds,
         "timed_out": timed_out,
+        "interrupted_by_user": interrupted_by_user,
         "exit_code": exit_code,
         "stdout_path": str(artifact_paths["stdout_path"]),
         "stderr_path": str(artifact_paths["stderr_path"]),
@@ -330,9 +442,10 @@ def _run_command_foreground(
         "command": command,
         "cwd": str(cwd),
         "mode": "foreground",
-        "status": metadata["status"],
+        "status": status,
         "timeout_seconds": timeout_seconds,
         "timed_out": timed_out,
+        "interrupted_by_user": interrupted_by_user,
         "exit_code": exit_code,
         "stdout": _truncate(stdout_text, output_limit),
         "stderr": _truncate(stderr_text, output_limit),

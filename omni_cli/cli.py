@@ -23,8 +23,10 @@ import platform
 import socket
 import getpass
 
+from omni_cli.message_builder import detect_launch_context
 from omni_cli.prompting import prepare_turn_request
 from omni_cli.query import ConversationState, run_tool_loop
+from omni_cli.tools.shell.run_command import try_interrupt_active_foreground
 from omni_cli.runtime import AppRuntime, bootstrap_runtime
 from omni_cli.sot import is_sot_block_content, is_orchestration_rules_content, load_sot_state_from_request_json
 from omni_cli.source_of_truth import build_source_bundle, SourceBundle
@@ -578,8 +580,31 @@ async def _run_command_turn(
         
         usage_table.add_row("Timestamp", now_str)
         usage_table.add_row("Turn Duration", duration_str, style="bold yellow")
-                
+
         console.print(usage_table)
+
+        # Persist a compact snapshot of THIS turn as `last_turn_metadata`, to be
+        # injected as a `CURRENT METADATA` user message between SoT and the next
+        # user prompt in the following turn. Ephemeral: never enters chat_history.
+        meta_snapshot: dict[str, Any] = {
+            "Session ID": session_id,
+            "Main Agent Tokens": main_tokens,
+            "Total Tokens": total_tokens,
+            "Total Cost": f"${result.usage.get('cost', 0.0):.6f}",
+            "Timestamp": now_str,
+            "Turn Duration": duration_str,
+        }
+        if result.usage.get("delegated_total_tokens"):
+            meta_snapshot["Sub-Agents Tokens"] = result.usage.get("delegated_total_tokens")
+        if ctx_len and ctx_len > 0 and isinstance(latest_prompt_tokens, (int, float)):
+            pct_raw = min(100, int((latest_prompt_tokens / ctx_len) * 100))
+            meta_snapshot["Context"] = f"{pct_raw}% ({int(latest_prompt_tokens)}/{ctx_len})"
+        if sot_files:
+            meta_snapshot["SoT Tracked Files"] = len(sot_files)
+        if agent_statuses:
+            meta_snapshot["Agents Used"] = len(agent_statuses)
+        meta_snapshot["launch_context"] = detect_launch_context()
+        conversation_state.last_turn_metadata = meta_snapshot
 
     return 0
 
@@ -765,6 +790,26 @@ async def _run_prompt(
 
     def _handle_sigint(_signum, _frame) -> None:
         nonlocal current_turn_task, turn_interrupt_requested
+        # Priority 1: if a foreground run_command is currently running, kill
+        # that child (and its process group) but let the model's turn keep
+        # going. This handles stuck commands without losing turn progress —
+        # the tool returns with status=stopped, interrupted_by_user=True and
+        # the model decides what to do next.
+        try:
+            if try_interrupt_active_foreground():
+                try:
+                    # Raw ANSI yellow to stay signal-safe (avoid rich's locks).
+                    sys.stderr.write(
+                        "\n\x1b[33mForeground run_command interrupted by user (Ctrl+C). "
+                        "Model will continue.\x1b[0m\n"
+                    )
+                    sys.stderr.flush()
+                except Exception:
+                    pass
+                return
+        except Exception:
+            pass
+        # Priority 2: no foreground command in flight — cancel the whole turn.
         if current_turn_task is not None and not current_turn_task.done():
             turn_interrupt_requested = True
             current_turn_task.cancel()

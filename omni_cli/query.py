@@ -12,6 +12,7 @@ from omni_cli.constants import (
     FALLBACK_REPEAT_LIMIT,
     SESSION_MUTATION_TOOLS,
 )
+from omni_cli.message_builder import build_previous_turn_metadata_message
 from omni_cli.providers.base import ProviderAdapter, ProviderRequest
 from omni_cli.runtime import AppRuntime
 from omni_cli.sot import (
@@ -47,6 +48,7 @@ class TurnResult:
 class ConversationState:
     chat_history: list[dict[str, Any]] = field(default_factory=list)
     sot: SoTState = field(default_factory=SoTState)
+    last_turn_metadata: dict[str, Any] | None = None
 
 
 @dataclass
@@ -601,6 +603,13 @@ def _build_payload_messages(conversation_state: ConversationState, request: Prov
     sot_message = build_sot_payload_message(conversation_state.sot)
     if sot_message is not None:
         payload.append(sot_message)
+
+    # 2.5 CURRENT METADATA block — metadata del turno previo (vacía en el primer turno,
+    #     en cuyo caso se omite). Efímero, no entra a chat_history.
+    if conversation_state.last_turn_metadata:
+        meta_message = build_previous_turn_metadata_message(conversation_state.last_turn_metadata)
+        if meta_message is not None:
+            payload.append(meta_message)
 
     # 3. El turno actual (último user prompt y lo que venga despues)
     payload.extend(conversation_state.chat_history[last_user_idx:])
