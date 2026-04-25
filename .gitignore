@@ -8,13 +8,13 @@ __pycache__/
 htmlcov/
 .mypy_cache/
 
-omni.toml
-omni.keys.toml
+sot.toml
+sot.keys.toml
 .env
 
-.omni-cli/
+.sot-cli/
 uv.lock
-omni_cli.egg-info/
+sot_cli.egg-info/
 
 # Temporary scripts
 temp_scripts/*

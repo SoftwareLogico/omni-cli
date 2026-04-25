@@ -3,7 +3,7 @@ requires = ["setuptools>=69.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "omni-cli"
+name = "sot-cli"
 version = "1.0.0"
 description = "Pragmatic multi-provider, multi-agent terminal assistant"
 readme = "README.md"
@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.scripts]
-omni-cli = "omni_cli.cli:main"
+sot-cli = "sot_cli.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["omni_cli*"]
+include = ["sot_cli*"]

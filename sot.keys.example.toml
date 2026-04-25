@@ -1,0 +1,16 @@
+# Rename this file to sot.keys.toml
+# This file should be in .gitignore so your keys never leak.
+
+[providers.openrouter]
+api_key = "sk-or-v1-..."
+
+[providers.lmstudio]
+# Usually doesn't need an API key for local models
+api_key = ""
+
+[providers.nvidia]
+api_key = "nvapi-..."
+
+[providers.ollama]
+# Usually doesn't need an API key for local models
+api_key = ""

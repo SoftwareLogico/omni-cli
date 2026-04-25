@@ -14,7 +14,7 @@ Objective: Add first-class support for `openai` and `anthropic` providers before
 - Add and validate `anthropic` provider configuration and runtime adapter support.
 - Ensure provider capability detection works consistently for both new providers.
 - Verify feature parity for streaming, tools, and SoT injection behavior.
-- Document provider setup examples in `omni.toml` and `omni.keys.toml`.
+- Document provider setup examples in `sot.toml` and `sot.keys.toml`.
 
 ## Phase 6: The Human-like Browser
 
@@ -29,7 +29,7 @@ Objective: Give the agent the ability to browse the web exactly like a human wou
 
 ## Phase 7: User-Friendly Web Interface
 
-Objective: Make `omni-cli` accessible to less experienced users through an intuitive, visual web-based UI that hides the terminal complexity while retaining full power-user access.
+Objective: Make `sot-cli` accessible to less experienced users through an intuitive, visual web-based UI that hides the terminal complexity while retaining full power-user access.
 
 ### Deliverables
 

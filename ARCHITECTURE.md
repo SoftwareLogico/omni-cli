@@ -1,8 +1,8 @@
-# Current architecture of omni-cli
+# Current architecture of sot-cli
 
 ## Runtime objective
 
-`omni-cli` is a local terminal assistant that delegates generation to the provider, but maintains control of the operational state on the runtime side:
+`sot-cli` is a local terminal assistant that delegates generation to the provider, but maintains control of the operational state on the runtime side:
 
 - local sessions and transcripts on disk;
 - local tools for files, shell and session control;
@@ -14,6 +14,8 @@
 The central rule is this:
 
 > The provider is not the source of truth of the project; the source of truth is the local state that the runtime reinjects into the model when appropriate.
+
+The CLI is named after this exact rule: **SoT** (Source of Truth) is the architectural keystone, and `sot-cli` is the tool that implements it end-to-end.
 
 ## Startup modes
 
@@ -35,7 +37,7 @@ This section centralizes the parameters that are commonly omitted in high-level 
 
 ### CLI commands used to run agents
 
-#### `omni-cli prompt [session_id]`
+#### `sot-cli prompt [session_id]`
 
 Interactive main loop (Boss agent context).
 
@@ -48,14 +50,14 @@ Supported flags:
 
 Examples:
 
-- `omni-cli prompt`
-- `omni-cli prompt <session_id> --provider openrouter --model x-ai/grok-4.1-fast`
+- `sot-cli prompt`
+- `sot-cli prompt <session_id> --provider openrouter --model x-ai/grok-4.1-fast`
 
-#### `omni-cli chat [session_id]`
+#### `sot-cli chat [session_id]`
 
 Alias of `prompt`, same parameters and behavior.
 
-#### `omni-cli command <session_id> <prompt>`
+#### `sot-cli command <session_id> <prompt>`
 
 One-shot turn runner (automation/multi-agent primitive).
 
@@ -68,16 +70,16 @@ Supported flags:
 
 Examples:
 
-- `omni-cli command <session_id> "Analyze this repo and propose fixes"`
-- `omni-cli command <session_id> "Run tests" --provider openrouter --disable-delegation`
+- `sot-cli command <session_id> "Analyze this repo and propose fixes"`
+- `sot-cli command <session_id> "Run tests" --provider openrouter --disable-delegation`
 
-#### `omni-cli run_task <agent_id> <prompt>`
+#### `sot-cli run_task <agent_id> <prompt>`
 
 Executes a headless sub-agent (Worker), typically created as `agent_N`.
 
 Examples:
 
-- `omni-cli run_task agent_1 "Search all TODOs and return a summary"`
+- `sot-cli run_task agent_1 "Search all TODOs and return a summary"`
 
 ### Tool commands used for sub-agent orchestration
 
@@ -106,9 +108,9 @@ No parameters. Returns delegated tasks and status (RUNNING/COMPLETED). Prefer `w
 ### Session and config notes for orchestration
 
 - Global CLI flag `--config <path>` can be passed before commands to use a specific TOML config.
-- Delegated agents inherit runtime context and session storage rules (including `OMNI_SESSIONS_DIR` when set).
+- Delegated agents inherit runtime context and session storage rules (including `SOT_SESSIONS_DIR` when set).
 - Boss/Worker prompt separation is enforced by the runtime (`AGENT_SYSTEM_PROMPT` vs `SUB_AGENT_SYSTEM_PROMPT`).
-All runtime tool settings live in `[tools]` inside `omni.toml`:
+All runtime tool settings live in `[tools]` inside `sot.toml`:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
@@ -209,7 +211,7 @@ Non-text behavior:
 
 ## Main components
 
-### `omni_cli/query.py`
+### `sot_cli/query.py`
 
 The core of the orchestrator. Runs the loop against the provider, executes tool calls, maintains the `SoTState`, and rebuilds the SoT after each tool call.
 
@@ -223,11 +225,11 @@ Modern APIs (like Anthropic and OpenAI) cache tokens from top to bottom. If a si
 - If we put the dynamic SoT at the _top_, every time a file is edited, the cache would break, and you would pay full price to re-process the entire 100k+ token chat history.
 - By putting the static `Chat History` at the top and the dynamic `SoT Block` at the bottom, the API successfully caches the system prompt and your entire conversation history. The cache only breaks at the very end of the payload when a file changes. This architectural decision makes long sessions incredibly fast and cheap.
 
-### `omni_cli/source_of_truth.py`
+### `sot_cli/source_of_truth.py`
 
 Materializes the persisted session state as `SourceBundle`. It no longer applies configurable caps like file count or size. If a path is attached to the session, the runtime attempts to materialize it.
 
-### `omni_cli/tools/session/delegate.py` (Multi-Agent Orchestration)
+### `sot_cli/tools/session/delegate.py` (Multi-Agent Orchestration)
 
 Implements the JIT (Just-In-Time) agent pattern.
 
@@ -241,15 +243,15 @@ Implements the JIT (Just-In-Time) agent pattern.
 
 ### MCP servers & runtime details
 
-- The runtime can optionally start and manage external MCP servers configured under `mcp.servers` in `omni.toml`. These servers are discovered at runtime and the tools they expose are added to the provider-visible function/schema list.
+- The runtime can optionally start and manage external MCP servers configured under `mcp.servers` in `sot.toml`. These servers are discovered at runtime and the tools they expose are added to the provider-visible function/schema list.
 - MCP-provided tools are namespaced by server (e.g. `myserver__toolname`) so they do not clash with local tool names. MCP tool calls are proxied through the runtime's `MCPManager` and returned as regular tool results.
-- Portable local MCP servers can live under the repository `mcps/` folder and be referenced with relative paths from `omni.toml` so the same config works across machines.
-- To support delegated child agents, the runtime honors the `OMNI_SESSIONS_DIR` environment variable: when set, the runtime points its `SessionStore` to that directory so sub-agents can run inside a parent's `sessions/` folder.
+- Portable local MCP servers can live under the repository `mcps/` folder and be referenced with relative paths from `sot.toml` so the same config works across machines.
+- To support delegated child agents, the runtime honors the `SOT_SESSIONS_DIR` environment variable: when set, the runtime points its `SessionStore` to that directory so sub-agents can run inside a parent's `sessions/` folder.
 - The runtime caches provider adapters and performs capability detection when needed; this drives tool availability and SoT composition per-provider.
 - The streaming provider adapter emits incremental text, tool-call, reasoning/thinking, and usage events when the provider returns them, and the CLI renders them live instead of buffering the whole response first.
 - The host-environment context injected into orchestration rules includes explicit local/UTC date-time and weekday fields (including ISO weekday number) so date answers do not rely on model inference.
 
-Example `omni.toml` MCP entry:
+Example `sot.toml` MCP entry:
 
 ## Current SoT model
 

@@ -1,18 +1,20 @@
-# omni-cli 🚀 Limitless Local AI Agent
+# sot-cli 🚀 Limitless Local AI Agent
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Providers](https://img.shields.io/badge/Providers-OpenRouter%20%7C%20LMStudio%20%7C%20Ollama%20%7C%20NVIDIA-brightgreen.svg)](https://github.com/softwarelogico/omni-cli)
-[![Stars](https://img.shields.io/github/stars/softwarelogico/omni-cli?style=social)](https://github.com/softwarelogico/omni-cli)
-[![License](https://img.shields.io/github/license/SoftwareLogico/omni-cli?style=flat&logo=mit)](LICENSE)
+[![Providers](https://img.shields.io/badge/Providers-OpenRouter%20%7C%20LMStudio%20%7C%20Ollama%20%7C%20NVIDIA-brightgreen.svg)](https://github.com/softwarelogico/sot-cli)
+[![Stars](https://img.shields.io/github/stars/softwarelogico/sot-cli?style=social)](https://github.com/softwarelogico/sot-cli)
+[![License](https://img.shields.io/github/license/SoftwareLogico/sot-cli?style=flat&logo=mit)](LICENSE)
 
 <p align="center">
-  <img src="assets/omni-robot.png" alt="omni-robot mascot" width="400">
+  <img src="assets/sot-robot.png" alt="sot-robot mascot" width="400">
   <br><strong>Token-efficient terminal powerhouse: SoT Method + Multi-Agent + Unrestricted Tools.</strong>
 </p>
 
 **A pragmatic, limitless, multi-provider terminal assistant built for developers who hate bloated frameworks.**
 
-`omni-cli` is a limitlessly local Python CLI designed to unleash the true reasoning power of modern LLMs on your projects. By combining a novel architectural pattern called the **Source of Truth (SoT) Method** with aggressive multi-tool batching, it drastically reduces API costs and model iterations while keeping output quality pristine. It acts as a powerful orchestration engine, empowering your AI with local tools and asynchronous sub-agents to solve complex problems seamlessly.
+`sot-cli` is a limitlessly local Python CLI designed to unleash the true reasoning power of modern LLMs on your projects. By combining a novel architectural pattern called the **Source of Truth (SoT) Method** with aggressive multi-tool batching, it drastically reduces API costs and model iterations while keeping output quality pristine. It acts as a powerful orchestration engine, empowering your AI with local tools and asynchronous sub-agents to solve complex problems seamlessly.
+
+The name `sot-cli` is a direct nod to the architectural pattern it is built around — the **Source of Truth (SoT) Method** — and is intentionally unique so it does not get lost in the sea of generic AI tooling names.
 
 ---
 
@@ -29,100 +31,126 @@
 
 ## 🚀 How to Run
 
-1. Clone the repo and install dependencies:
+### Clone the repo
 
-   ```bash
-   pip install -e .
-   ```
+```bash
+git clone https://github.com/SoftwareLogico/sot-cli.git
+cd sot-cli
+```
 
-2. Rename and configure the TOML files:
+### (Optional but recommended) Create and activate a virtual environment
 
-   ```bash
-   # Copy the public configuration file
-   cp omni.example.toml omni.toml
+```bash
+#uv
+uv venv <env_name> --python 3.10
+source <env_name>/bin/activate
+uv pip install -e .
+uv run sot-cli
 
-   # Copy the private keys file (this file is in .gitignore so your secrets never leak)
-   cp omni.keys.example.toml omni.keys.toml
-   ```
+#conda
+conda create -n <env_name> python=3.10
+conda activate <env_name>
+pip install -e .
+sot-cli
 
-3. Add your provider API keys to `omni.keys.toml`:
+#venv
+python3 -m venv <env_name>
+source <env_name>/bin/activate
+pip install -e .
+sot-cli
+```
 
-   ```toml
-   [providers.openrouter]
-   api_key = "sk-or-v1-your-key-here"
+### Install dependencies
 
-   [providers.lmstudio]
-   # Usually doesn't need an API key for local models
-   api_key = ""
+```bash
+pip install -e .
+```
 
-   [providers.ollama]
-   # Usually doesn't need an API key for local models
-   api_key = ""
+### Run sot-cli
 
-   [providers.nvidia]
-   api_key = "nvapi-your-key-here"
-   ```
+```bash
+sot-cli
+```
 
-4. Configure providers in `omni.toml` (example provider format):
+Follow the steps the first time, have Fun!!
 
-   ```toml
-   [providers.openrouter]
-   base_url = "https://openrouter.ai/api/v1"
-   model = "google/gemma-4-31b-it"
-   temperature = 0.7
-   max_output_tokens = 8192
+## 🛠 Manual Installation
 
-   [providers.lmstudio]
-   base_url = "http://localhost:1234/v1"
-   model = "model_name" # or "" to let the adapter auto-resolve
-   temperature = 0.5
-   max_output_tokens = 32768
+If you would rather wire things up by hand instead of going through the first-run wizard, you can prepare the config files yourself. After cloning and installing dependencies (see [How to Run](#-how-to-run)), follow the steps below.
 
-   [providers.ollama]
-   base_url = "http://localhost:11434/v1"
-   model = "model_name" # or "" to let the adapter auto-resolve
-   temperature = 0.5
-   max_output_tokens = 8192
+### Rename TOML files
 
-   [providers.nvidia]
-   base_url = "https://integrate.api.nvidia.com/v1"
-   model = "qwen/qwen3-coder-480b-a35b-instruct"
-   temperature = 1
-   max_output_tokens = 16384
-   ```
+```bash
+# Copy the public configuration file
+cp sot.example.toml sot.toml
 
-5. Run the CLI:
+# Copy the private keys file (this file is in .gitignore so your secrets never leak)
+cp sot.keys.example.toml sot.keys.toml
+```
 
-   ```bash
-   # Use the default provider set in omni.toml
-   omni-cli
+### Add API keys
 
-   # Or override the provider
-   omni-cli --provider [ollama/lmstudio/openrouter/nvidia]
-   #e.g: omni-cli --provider ollama
+Edit `sot.keys.toml` and fill in the providers you intend to use. Local providers (`lmstudio`, `ollama`) usually leave the key empty.
 
-   # using a virtual environment (optional but recommended)
+```toml
+[providers.openrouter]
+api_key = "sk-or-v1-your-key-here"
 
-   #uv
-   uv venv <env_name> --python 3.xx
-   source <env_name>/bin/activate
-   uv run omni-cli --provider openrouter
+[providers.lmstudio]
+# Usually doesn't need an API key for local models
+api_key = ""
 
-   #conda
-   conda create -n <env_name> python=3.xx
-   conda activate <env_name>
-   omni-cli --provider openrouter
+[providers.ollama]
+# Usually doesn't need an API key for local models
+api_key = ""
 
-   #venv
-   python3 -m venv <env_name>
-   source <env_name>/bin/activate
-   pip install -e .
-   omni-cli --provider openrouter
+[providers.nvidia]
+api_key = "nvapi-your-key-here"
+```
 
-   # Resume a previous session
+### Configure providers
 
-   omni-cli <session_id>
-   ```
+Edit `sot.toml` to set base URLs, models, and per-provider runtime options.
+
+```toml
+[providers.openrouter]
+base_url = "https://openrouter.ai/api/v1"
+model = "x-ai/grok-4.1-fast"
+temperature = 0.7
+max_output_tokens = 8192
+
+[providers.lmstudio]
+base_url = "http://localhost:1234/v1"
+model = "model_name" # or "" to let the adapter auto-resolve
+temperature = 0.5
+max_output_tokens = 8192
+
+[providers.ollama]
+base_url = "http://localhost:11434/v1"
+model = "model_name" # or "" to let the adapter auto-resolve
+temperature = 0.5
+max_output_tokens = 8192
+
+[providers.nvidia]
+base_url = "https://integrate.api.nvidia.com/v1"
+model = "qwen/qwen3-coder-480b-a35b-instruct"
+temperature = 1
+max_output_tokens = 8192
+```
+
+### Run the CLI
+
+```bash
+# Use the default provider set in sot.toml (or pick one from the interactive selector)
+sot-cli
+
+# Or override the provider explicitly
+sot-cli --provider [ollama/lmstudio/openrouter/nvidia]
+# e.g. sot-cli --provider ollama
+
+# Resume a previous session
+sot-cli <session_id>
+```
 
 ## Platform Compatibility
 
@@ -134,7 +162,7 @@
 
 Most AI coding agents fail because they append every file read and every code change directly into the chat history. This leads to massive token bloat and "Lost in the Middle" hallucinations where the AI reads an outdated version of a file from 10 turns ago.
 
-`omni-cli` fixes this by separating **Permanent History** from **Ephemeral State**.
+`sot-cli` fixes this by separating **Permanent History** from **Ephemeral State**.
 
 1. **Permanent History (`chat_history`):** Only contains dialogue and lightweight tool metadata (e.g., `"read file X -> added to SoT"`).
 2. **Ephemeral Source of Truth (SoT):** This method tracks the latest state of your context files so the model always reads the most up-to-date version, and not 10 different versions of the same file from the chat history. When the model uses a tool to read or edit a file, the SoT updates that file's content. The model can then refer to the SoT for the latest state of any file, without bloating the chat history.
@@ -149,16 +177,16 @@ You can attach core files (like database schemas or project guidelines) permanen
 
 Optional benchmark suite for post-launch validation.
 
-- ✅ [agent_test.md](agent_test.md): Safe end-to-end benchmark. It validates background worker orchestration, file download and verification, local file create/edit flow, native OS command execution, fallback/retry behavior, and final cleanup/reporting.
-- ⚠️ [seppuku_test.md](seppuku_test.md): Intentionally destructive lab benchmark used to demonstrate raw model power without babysitting or guardrails.
+- ✅ [agent_test.md](prompt_tests/agent_test.md): Safe end-to-end benchmark. It validates background worker orchestration, file download and verification, local file create/edit flow, native OS command execution, fallback/retry behavior, and final cleanup/reporting.
+- ⚠️ [seppuku_test.md](prompt_tests/seppuku_test.md): Intentionally destructive lab benchmark used to demonstrate raw model power without babysitting or guardrails.
 
-⚠️WARNING: [seppuku_test.md](seppuku_test.md) is for isolated lab VM use only .⚠️
+⚠️WARNING: [seppuku_test.md](prompt_tests/seppuku_test.md) is for isolated lab VM use only .⚠️
 
 ## 💸 Token Economy: Scripts > Tool Ping-Pong
 
 We hate "Tool Ping-Pong" (when an AI calls `list_dir`, waits, calls `read_file`, waits, calls `grep`, waits). It burns hundreds of thousands of context tokens.
 
-`omni-cli` is designed to batch operations. The system prompts drive the model to use `run_command` for bash one-liners or Python mini-scripts, `list_dir` for powerful filtered discovery (by name, extension, size, content), and `search_code` for regex pattern matching with line numbers across source files — all in a single turn.
+`sot-cli` is designed to batch operations. The system prompts drive the model to use `run_command` for bash one-liners or Python mini-scripts, `list_dir` for powerful filtered discovery (by name, extension, size, content), and `search_code` for regex pattern matching with line numbers across source files — all in a single turn.
 
 Why use 5 sequential tool calls when the model can batch `list_dir` + `search_code` + `read_many_files` in one response?
 
@@ -174,10 +202,6 @@ If you are coming from other trendy AI coding tools, you might be looking for fe
 
 **A 'Skill' is just a glorified preprompt.** We don't bloat the codebase with fake "skills" (e.g., a React Skill, a Docker Skill). Modern LLMs already know React and Docker. If they need to do something specific, they can write a bash or python script via `run_command` on the fly.
 
-### "Where are the LSP Tools (Go to Definition, Find References)?"
-
-**LSP tools blind the model.** They were invented when models had 8k context limits and had to navigate codebases through a keyhole. Today, models have 200k+ context windows. Forcing a model to use 15 sequential LSP tool calls to understand a flow destroys the "Big Picture" and wastes tokens. Just load the 3 relevant files into the SoT and let the model read the actual code.
-
 ### "Why is there no Context Compaction / Summarization?"
 
 **Because it causes lobotomies.** Summarizing past turns makes the model forget crucial details. By using the SoT Method, our `chat_history` only contains metadata and dialogue. It grows so slowly that you will likely finish your task long before hitting the 200k token limit.
@@ -190,7 +214,7 @@ If you are coming from other trendy AI coding tools, you might be looking for fe
 
 ## 🤖 Asynchronous Multi-Agent Orchestration
 
-`omni-cli` supports a Boss-Worker delegation model using Just-In-Time (JIT) sub-agents.
+`sot-cli` supports a Boss-Worker delegation model using Just-In-Time (JIT) sub-agents.
 
 If your main SoT is heavily loaded (expensive context), the main agent can use `delegate_task` to spawn a sub-agent in the background with a clean, empty context.
 The sub-agent does the dirty work (trial-and-error shell scripts, complex multi-step execution, compiling), logs everything silently to `agent.log`, and returns a clean report to the Boss via invisible IPC. For file discovery and code search, the Boss can use `list_dir` and `search_code` directly — cheaper than spawning a sub-agent.
@@ -207,7 +231,7 @@ For the complete and up-to-date tool and parameter reference, see [ARCHITECTURE.
 
 ## ⚙️ Runtime Configuration
 
-All runtime settings live in `omni.toml` under `[tools]`. In a nutshell:
+All runtime settings live in `sot.toml` under `[tools]`. In a nutshell:
 
 - **Output & detection:** `output_limit`, `binary_check_size`, `default_command_timeout_seconds`.
 - **Streaming visibility:** `show_thinking` (model reasoning), `show_full` (tool call arguments in real time).
@@ -218,7 +242,7 @@ For the full reference table with defaults and descriptions, see [ARCHITECTURE.m
 
 ## 🔌 MCP Servers
 
-You can easily extend `omni-cli` with external tools using the Model Context Protocol (MCP). Just add them to your `omni.toml`:
+You can easily extend `sot-cli` with external tools using the Model Context Protocol (MCP). Just add them to your `sot.toml`:
 
 ```toml
 [mcp.servers.test]
@@ -236,18 +260,18 @@ This tool is **limitless**. It is not built for end-users; it is built for power
 
 ## 🌟 Star & Contribute
 
-⭐ **Star if it saves your API bill!** [Star Here](https://github.com/softwarelogico/omni-cli)
+⭐ **Star if it saves your API bill!** [Star Here](https://github.com/softwarelogico/sot-cli)
 
 - 🐛 PRs/issues welcome (see [ROADMAP](ROADMAP.md)).
-- 📢 Share: "omni-cli: AI agent without token waste #AICoding"
+- 📢 Share: "sot-cli: AI agent without token waste #AICoding"
 
 ## 👤 Author & Credits
 
 **Created by Ramses Mendoza (SoftwareLogico)**
 
-I built `omni-cli` and formalized the **Source of Truth (SoT) Method** for terminal agents out of frustration with existing tools. Most AI coding assistants on the market are bloated, burn through tokens, and collapse under the weight of their own context windows.
+I built `sot-cli` and formalized the **Source of Truth (SoT) Method** for terminal agents out of frustration with existing tools. Most AI coding assistants on the market are bloated, burn through tokens, and collapse under the weight of their own context windows.
 
-While the concept of maintaining a "state" is common in software engineering, the specific architectural pattern of decoupling a permanent metadata-only history from an ephemeral, fully-rebuilt file block—and injecting it right before the user prompt—is the core innovation of `omni-cli`.
+While the concept of maintaining a "state" is common in software engineering, the specific architectural pattern of decoupling a permanent metadata-only history from an ephemeral, fully-rebuilt file block—and injecting it right before the user prompt—is the core innovation of `sot-cli`.
 
 **LinkedIn:** https://www.linkedin.com/in/ramsesisaid
 
