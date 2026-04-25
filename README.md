@@ -1,22 +1,24 @@
 # sot-cli 🚀 Limitless Local AI Agent
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Providers](https://img.shields.io/badge/Providers-OpenRouter%20%7C%20LMStudio%20%7C%20Ollama%20%7C%20NVIDIA-brightgreen.svg)](https://github.com/softwarelogico/sot-cli)
+[![Providers](https://img.shields.io/badge/Providers-OpenRouter%20%7C%20LMStudio%20%7C%20Ollama%20%7C%20NVIDIA-brightgreen.svg)](ARCHITECTURE.md)
 [![Stars](https://img.shields.io/github/stars/softwarelogico/sot-cli?style=social)](https://github.com/softwarelogico/sot-cli)
 [![License](https://img.shields.io/github/license/SoftwareLogico/sot-cli?style=flat&logo=mit)](LICENSE)
 
 <p align="center">
-  <img src="assets/sot-robot.png" alt="sot-robot mascot" width="400">
+    <a href="https://youtu.be/9h20O_aH6vs" title="sot-cli in action: True AI OS Control (Zero Guardrails)">
+    <img src="https://img.youtube.com/vi/9h20O_aH6vs/maxresdefault.jpg" alt="sot-cli Demo" />
+  </a>
   <br><strong>Token-efficient terminal powerhouse: SoT Method + Multi-Agent + Unrestricted Tools.</strong>
 </p>
+<p align="center">
 
+</p>
 **A pragmatic, limitless, multi-provider terminal assistant built for developers who hate bloated frameworks.**
 
 `sot-cli` is a limitlessly local Python CLI designed to unleash the true reasoning power of modern LLMs on your projects. By combining a novel architectural pattern called the **Source of Truth (SoT) Method** with aggressive multi-tool batching, it drastically reduces API costs and model iterations while keeping output quality pristine. It acts as a powerful orchestration engine, empowering your AI with local tools and asynchronous sub-agents to solve complex problems seamlessly.
 
 The name `sot-cli` is a direct nod to the architectural pattern it is built around — the **Source of Truth (SoT) Method** — and is intentionally unique so it does not get lost in the sea of generic AI tooling names.
-
----
 
 ## ✨ Key Features
 
@@ -138,15 +140,18 @@ temperature = 1
 max_output_tokens = 8192
 ```
 
-### Run the CLI
+### Run the CLI with the most common parameters
 
 ```bash
-# Use the default provider set in sot.toml (or pick one from the interactive selector)
+#RECOMMENDED Use the default provider set in sot.toml (or pick one from the interactive selector)
 sot-cli
 
 # Or override the provider explicitly
 sot-cli --provider [ollama/lmstudio/openrouter/nvidia]
 # e.g. sot-cli --provider ollama
+
+sot-cli --provider [ollama/lmstudio/openrouter/nvidia] --model modelName
+# e.g. sot-cli --provider openrouter --model deepseek/deepseek-v4-pro
 
 # Resume a previous session
 sot-cli <session_id>
