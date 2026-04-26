@@ -258,7 +258,14 @@ def execute_list_dir(arguments: dict[str, Any], root_dir: Path) -> dict[str, Any
             return
         visited_dirs.add(resolved_directory)
 
-        for child in sorted(directory.iterdir(), key=lambda item: item.name.lower()):
+        try:
+            children = list(directory.iterdir())
+        except (PermissionError, OSError):
+            # Silently skip directories we cannot read (e.g. .Trashes on macOS,
+            # System Volume Information on Windows, sockets, broken mounts).
+            return
+
+        for child in sorted(children, key=lambda item: item.name.lower()):
             nonlocal scanned_entry_count
             scanned_entry_count += 1
 

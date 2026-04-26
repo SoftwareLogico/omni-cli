@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -135,7 +136,13 @@ class ToolRegistry:
             )
 
         try:
-            raw_result = handler(arguments)
+            # Local tool handlers are synchronous and some of them (run_command
+            # foreground, large reads, search_code) block for many seconds. If
+            # we ran them inline on the asyncio event loop we would freeze the
+            # whole runtime — including MCP stdio/websocket clients that must
+            # service keep-alives in the background. Hand the call off to a
+            # worker thread so the event loop keeps spinning.
+            raw_result = await asyncio.to_thread(handler, arguments)
             if isinstance(raw_result, ToolPayload):
                 payload = raw_result.payload
                 record_content = json.dumps({"ok": True, **payload}, ensure_ascii=True)

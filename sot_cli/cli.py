@@ -1088,11 +1088,11 @@ async def _run_command_turn(
                 usage_table.add_section()
             except Exception:
                 pass
-            usage_table.add_row("SoT Tracked Files", str(len(sot_files)), style="bold magenta")
+            usage_table.add_row("SoT Tracked Files", "Always updated in real time => " + str(len(sot_files)), style="bold magenta")
             for fpath in sorted(sot_files):
                 fname = Path(fpath).name
                 usage_table.add_row(f"  📄 {fname}", "[dim]in context[/dim]")
-        
+            
         if agent_statuses:
             try:
                 usage_table.add_section()

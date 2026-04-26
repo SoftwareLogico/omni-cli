@@ -6,6 +6,7 @@ from typing import Any
 from sot_cli.tools.editor.text_utils import (
     _apply_edit_to_text,
     _find_actual_string,
+    _match_line_endings,
     _prepare_replacement_text,
     _preserve_quote_style,
 )
@@ -34,7 +35,10 @@ def execute_edit_file(arguments: dict[str, Any], root_dir: Path) -> dict[str, An
             raise FileNotFoundError(f"File does not exist: {path}")
         path.parent.mkdir(parents=True, exist_ok=True)
         content_to_write = _prepare_replacement_text(path, new_string)
-        path.write_text(content_to_write, encoding="utf-8")
+        # newline="" disables Python's universal-newlines translation on write
+        # so we never silently rewrite a CRLF document with LF endings.
+        with path.open("w", encoding="utf-8", newline="") as fh:
+            fh.write(content_to_write)
         return {
             "path": str(path),
             "status": "success",
@@ -44,7 +48,10 @@ def execute_edit_file(arguments: dict[str, Any], root_dir: Path) -> dict[str, An
         }
 
     try:
-        file_content = path.read_text(encoding="utf-8")
+        # newline="" disables universal-newlines on read so we can detect
+        # whether the file uses CRLF and preserve that on write-back.
+        with path.open("r", encoding="utf-8", newline="") as fh:
+            file_content = fh.read()
     except UnicodeDecodeError as exc:
         raise ValueError(
             f"Cannot edit file as UTF-8 text: {path}. Use write_file for full replacement or run_command for binary handling."
@@ -56,8 +63,9 @@ def execute_edit_file(arguments: dict[str, Any], root_dir: Path) -> dict[str, An
                 "Cannot use empty old_string on a non-empty existing file. "
                 "Use write_file for a full replacement or provide more context in old_string."
             )
-        replacement_text = _prepare_replacement_text(path, new_string)
-        path.write_text(replacement_text, encoding="utf-8")
+        replacement_text = _match_line_endings(file_content, _prepare_replacement_text(path, new_string))
+        with path.open("w", encoding="utf-8", newline="") as fh:
+            fh.write(replacement_text)
         return {
             "path": str(path),
             "status": "success",
@@ -84,12 +92,17 @@ def execute_edit_file(arguments: dict[str, Any], root_dir: Path) -> dict[str, An
         path,
         _preserve_quote_style(old_string, actual_old_string, new_string),
     )
+    # Re-adapt line endings AFTER _prepare_replacement_text — that step calls
+    # str.rstrip() which would otherwise eat any CRs we inserted earlier and
+    # leave the file with mixed LF/CRLF endings.
+    replacement_text = _match_line_endings(file_content, replacement_text)
     updated_content = _apply_edit_to_text(file_content, actual_old_string, replacement_text, replace_all)
 
     if updated_content == file_content:
         raise ValueError("Original and edited file are identical. Failed to apply edit.")
 
-    path.write_text(updated_content, encoding="utf-8")
+    with path.open("w", encoding="utf-8", newline="") as fh:
+        fh.write(updated_content)
     return {
         "path": str(path),
         "status": "success",

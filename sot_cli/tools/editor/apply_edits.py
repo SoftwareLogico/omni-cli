@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from sot_cli.tools.editor.text_utils import (
+    _match_line_endings,
     _normalize_quotes,
     _prepare_replacement_text,
     _preserve_quote_style,
@@ -105,29 +106,21 @@ def _line_start_offsets(content: str) -> list[int]:
     return offsets
 
 
-def _replace_line_range(content: str, start_line: int, end_line: int, new_string: str) -> tuple[str, int, int]:
-    offsets = _line_start_offsets(content)
-    total_lines = _count_lines(content)
-    if total_lines == 0:
-        if start_line == 1 and end_line == 1:
-            return new_string, 1, 1
-        raise _EditValidationError("Cannot target lines in an empty file unless start_line=end_line=1")
-    if end_line > total_lines:
-        raise _EditValidationError(
-            f"Line range {start_line}-{end_line} is outside the file (total lines: {total_lines})"
-        )
-
-    start_index = offsets[start_line - 1]
-    end_index = offsets[end_line] if end_line < len(offsets) else len(content)
-    return content[:start_index] + new_string + content[end_index:], start_line, end_line
-
-
 def _find_text_target(
     content: str,
     old_string: str,
     before_context: str | None,
     after_context: str | None,
 ) -> tuple[int, str]:
+    # CRLF fallback: if the file uses Windows line endings but the model emitted
+    # LF, transparently re-encode the search strings before locating the target.
+    if "\r\n" in content and "\r\n" not in old_string:
+        old_string = _match_line_endings(content, old_string)
+        if before_context is not None:
+            before_context = _match_line_endings(content, before_context)
+        if after_context is not None:
+            after_context = _match_line_endings(content, after_context)
+
     normalized_content = _normalize_quotes(content)
     normalized_old_string = _normalize_quotes(old_string)
     normalized_before = _normalize_quotes(before_context) if before_context is not None else None
@@ -168,23 +161,43 @@ def _find_text_target(
     return start_index, actual_old_string
 
 
-def _replace_text_target(
+def _resolve_text_target(
     content: str,
     old_string: str,
     new_string: str,
     before_context: str | None,
     after_context: str | None,
-) -> tuple[str, int]:
+) -> tuple[int, int, str]:
+    """Resolve a text-target edit to absolute (start, end, replacement) in ``content``."""
     start_index, actual_old_string = _find_text_target(content, old_string, before_context, after_context)
     replacement_text = _preserve_quote_style(old_string, actual_old_string, new_string)
+    # Ensure the replacement uses the same line endings as the surrounding file.
+    replacement_text = _match_line_endings(content, replacement_text)
     end_index = start_index + len(actual_old_string)
     if replacement_text == "" and not actual_old_string.endswith("\n") and content[end_index:end_index + 1] == "\n":
         end_index += 1
     if actual_old_string == replacement_text and end_index == start_index + len(actual_old_string):
         raise _EditValidationError("No changes to make for one of the requested edits.")
-    updated = content[:start_index] + replacement_text + content[end_index:]
-    target_line = content.count("\n", 0, start_index) + 1
-    return updated, target_line
+    return start_index, end_index, replacement_text
+
+
+def _resolve_line_range(
+    content: str, start_line: int, end_line: int, new_string: str
+) -> tuple[int, int]:
+    """Resolve a line-range edit to absolute (start, end) offsets in ``content``."""
+    offsets = _line_start_offsets(content)
+    total_lines = _count_lines(content)
+    if total_lines == 0:
+        if start_line == 1 and end_line == 1:
+            return 0, 0
+        raise _EditValidationError("Cannot target lines in an empty file unless start_line=end_line=1")
+    if end_line > total_lines:
+        raise _EditValidationError(
+            f"Line range {start_line}-{end_line} is outside the file (total lines: {total_lines})"
+        )
+    start_index = offsets[start_line - 1]
+    end_index = offsets[end_line] if end_line < len(offsets) else len(content)
+    return start_index, end_index
 
 
 def execute_apply_text_edits(arguments: dict[str, Any], root_dir: Path) -> dict[str, Any]:
@@ -198,52 +211,105 @@ def execute_apply_text_edits(arguments: dict[str, Any], root_dir: Path) -> dict[
         raise IsADirectoryError(f"Path is a directory, not a file: {path}")
 
     try:
-        original_content = path.read_text(encoding="utf-8")
+        # newline="" disables universal-newlines so CRLF files keep their
+        # \r\n in memory; otherwise we would silently rewrite the document
+        # with LF on save and break Windows line endings.
+        with path.open("r", encoding="utf-8", newline="") as fh:
+            original_content = fh.read()
     except UnicodeDecodeError as exc:
         raise ValueError(
             f"Cannot edit file as UTF-8 text: {path}. Use write_file for full replacement or run_command for binary handling."
         ) from exc
 
-    updated_content = original_content
-    applied_edits: list[dict[str, Any]] = []
+    # ──────────────────────────────────────────────────────────────────────
+    # Resolve every edit against the ORIGINAL content first, then apply them
+    # in reverse positional order. Doing it this way prevents the classic
+    # "shift" bug: when a prior edit changes the number of lines, line
+    # numbers (and character offsets) computed by the model against the
+    # original file no longer line up with the in-flight buffer. Resolving
+    # everything up-front and replaying in descending order keeps every
+    # remaining offset valid while we splice.
+    # ──────────────────────────────────────────────────────────────────────
+    resolved: list[dict[str, Any]] = []
     for index, edit in enumerate(edits, start=1):
         prepared_new_string = _prepare_replacement_text(path, edit["new_string"])
         if edit["old_string"] is not None:
-            updated_content, target_line = _replace_text_target(
-                updated_content,
+            start_index, end_index, replacement_text = _resolve_text_target(
+                original_content,
                 edit["old_string"],
                 prepared_new_string,
                 edit["before_context"],
                 edit["after_context"],
             )
-            applied_edits.append(
+            resolved.append(
                 {
                     "index": index,
                     "mode": "text",
-                    "target_line": target_line,
+                    "start": start_index,
+                    "end": end_index,
+                    "replacement": replacement_text,
+                    "target_line": original_content.count("\n", 0, start_index) + 1,
                 }
             )
             continue
 
-        updated_content, start_line, end_line = _replace_line_range(
-            updated_content,
-            int(edit["start_line"]),
-            int(edit["end_line"]),
-            prepared_new_string,
+        start_line = int(edit["start_line"])
+        end_line = int(edit["end_line"])
+        start_index, end_index = _resolve_line_range(
+            original_content, start_line, end_line, prepared_new_string
         )
-        applied_edits.append(
+        # Match the file's line endings so we never inject LF into a CRLF block.
+        replacement_text = _match_line_endings(original_content, prepared_new_string)
+        resolved.append(
             {
                 "index": index,
                 "mode": "line_range",
+                "start": start_index,
+                "end": end_index,
+                "replacement": replacement_text,
                 "start_line": start_line,
                 "end_line": end_line,
             }
         )
 
+    # Validate that no two edits overlap in the original content.
+    overlap_check = sorted(resolved, key=lambda r: (r["start"], r["end"]))
+    for i in range(1, len(overlap_check)):
+        prev = overlap_check[i - 1]
+        curr = overlap_check[i]
+        if curr["start"] < prev["end"]:
+            raise _EditValidationError(
+                f"edits[{prev['index']}] and edits[{curr['index']}] overlap in the original "
+                f"file. Split them into separate calls or merge them into one edit."
+            )
+
+    # Apply in descending order so earlier offsets remain valid throughout.
+    updated_content = original_content
+    for r in sorted(resolved, key=lambda r: r["start"], reverse=True):
+        updated_content = updated_content[: r["start"]] + r["replacement"] + updated_content[r["end"]:]
+
+    # Reconstruct the per-edit report in the original (input) order.
+    applied_edits: list[dict[str, Any]] = []
+    for r in resolved:
+        if r["mode"] == "text":
+            applied_edits.append(
+                {"index": r["index"], "mode": "text", "target_line": r["target_line"]}
+            )
+        else:
+            applied_edits.append(
+                {
+                    "index": r["index"],
+                    "mode": "line_range",
+                    "start_line": r["start_line"],
+                    "end_line": r["end_line"],
+                }
+            )
+
     if updated_content == original_content:
         raise ValueError("Original and edited file are identical. Failed to apply edits.")
 
-    path.write_text(updated_content, encoding="utf-8")
+    with path.open("w", encoding="utf-8", newline="") as fh:
+        fh.write(updated_content)
     return {
         "path": str(path),
         "status": "success",

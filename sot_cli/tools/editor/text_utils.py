@@ -21,6 +21,21 @@ def _strip_trailing_whitespace(text: str) -> str:
     return "\n".join(line.rstrip() for line in text.split("\n"))
 
 
+def _match_line_endings(template: str, text: str) -> str:
+    """Return ``text`` re-encoded to use the same line-ending style as ``template``.
+
+    Models almost always emit ``\\n`` regardless of the file they are editing,
+    so on Windows-encoded files (CRLF) a literal find() against the file would
+    miss every multi-line match. This helper converts ``text`` to whatever the
+    surrounding file uses so the search succeeds and the edited block keeps
+    consistent line endings after replacement.
+    """
+    if "\r\n" in template and "\r\n" not in text:
+        # Normalize any stray CR-only first so we do not create CRCRLF.
+        return text.replace("\r\n", "\n").replace("\n", "\r\n")
+    return text
+
+
 def _find_actual_string(file_content: str, search_string: str) -> str | None:
     if file_content.find(search_string) != -1:
         return search_string
@@ -28,9 +43,21 @@ def _find_actual_string(file_content: str, search_string: str) -> str | None:
     normalized_search = _normalize_quotes(search_string)
     normalized_file = _normalize_quotes(file_content)
     search_index = normalized_file.find(normalized_search)
-    if search_index == -1:
-        return None
-    return file_content[search_index:search_index + len(search_string)]
+    if search_index != -1:
+        return file_content[search_index:search_index + len(search_string)]
+
+    # CRLF fallback: file uses Windows line endings but the model produced LF.
+    if "\r\n" in file_content and "\r\n" not in search_string:
+        crlf_search = _match_line_endings(file_content, search_string)
+        idx = file_content.find(crlf_search)
+        if idx != -1:
+            return crlf_search
+        normalized_crlf_search = _normalize_quotes(crlf_search)
+        idx = normalized_file.find(normalized_crlf_search)
+        if idx != -1:
+            return file_content[idx:idx + len(crlf_search)]
+
+    return None
 
 
 def _prepare_replacement_text(path: Path, new_string: str) -> str:

@@ -642,14 +642,21 @@ def _run_command_background(
         encoding="utf-8",
     )
 
+    supervisor_kwargs: dict[str, Any] = {
+        "cwd": str(cwd),
+        "stdin": subprocess.DEVNULL,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "text": False,
+    }
+    if os.name == "nt":
+        supervisor_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        supervisor_kwargs["start_new_session"] = True
+
     supervisor = subprocess.Popen(
         _background_supervisor_invocation(artifact_paths["metadata_path"]),
-        cwd=str(cwd),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        text=False,
-        start_new_session=True,
+        **supervisor_kwargs,
     )
     metadata = update_command_metadata(
         artifact_paths["metadata_path"],
@@ -684,16 +691,23 @@ def _run_background_supervisor(metadata_path: Path) -> int:
         return 1
 
     process_args = _shell_command(command)
+    process_kwargs: dict[str, Any] = {
+        "cwd": str(cwd),
+        "stdin": subprocess.DEVNULL,
+        "stderr": subprocess.STDOUT,
+        "text": False,
+    }
+    if os.name == "nt":
+        process_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        process_kwargs["start_new_session"] = True
+
     try:
         with combined_output_path.open("ab") as combined_handle:
             process = subprocess.Popen(
                 process_args,
-                cwd=str(cwd),
-                stdin=subprocess.DEVNULL,
                 stdout=combined_handle,
-                stderr=subprocess.STDOUT,
-                text=False,
-                start_new_session=True,
+                **process_kwargs,
             )
     except Exception as exc:
         _append_supervisor_log(combined_output_path, f"[supervisor error] failed to start command: {exc}\n")
