@@ -195,7 +195,7 @@ We hate "Tool Ping-Pong" (when an AI calls `list_dir`, waits, calls `read_file`,
 
 `sot-cli` is designed to batch operations. The system prompts drive the model to use `run_command` for bash one-liners or Python mini-scripts, `list_dir` for powerful filtered discovery (by name, extension, size, content), and `search_code` for regex pattern matching with line numbers across source files — all in a single turn.
 
-Why use 5 sequential tool calls when the model can batch `list_dir` + `search_code` + `read_many_files` in one response?
+Why use 5 sequential tool calls when the model can batch `list_dir` + `search_code` + `read_files` (with all known paths in one array) in one response?
 
 ## 🛑 The Anti-Hype FAQ
 

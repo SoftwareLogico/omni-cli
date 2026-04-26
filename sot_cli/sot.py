@@ -145,11 +145,7 @@ def update_tracked_from_tool_result(
     except (json.JSONDecodeError, TypeError):
         return
 
-    if tool_name == "read_text_file":
-        _update_single_read_result(state, payload, tool_result.supplemental_messages)
-        return
-
-    if tool_name == "read_many_files":
+    if tool_name == "read_files":
         results = payload.get("results")
         if not isinstance(results, list):
             return

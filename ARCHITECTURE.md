@@ -116,7 +116,7 @@ All runtime tool settings live in `[tools]` inside `sot.toml`:
 |---------|---------|-------------|
 | `output_limit` | `12000` | Max characters of tool output before truncation. |
 | `default_command_timeout_seconds` | `180` | Default timeout (in seconds) applied to `run_command` foreground execution when the model does not pass an explicit `timeout_seconds`. The model is always free to override per call. |
-| `binary_check_size` | `8192` | Byte threshold for binary file detection in `read_text_file`. |
+| `binary_check_size` | `8192` | Byte threshold for binary file detection in `read_files`. |
 | `show_thinking` | `true` | Stream the model's reasoning/thinking tokens to the terminal. Independent of `show_full`; gates reasoning output only. |
 | `show_full` | `true` | Stream tool-call argument chunks (and any other non-reasoning, non-text chunk the provider emits) in real time as the model generates them, verbatim. When disabled, tool calls are only shown as a single assembled line after streaming completes. Provider chunks are never mutated by the runtime; `show_full` only toggles whether they are rendered live. |
 | `max_rounds` | `25` | Max tool-call rounds the boss agent can execute per user prompt before the runtime stops it. |
@@ -162,7 +162,7 @@ When `content_contains` is used, matching entries include content match metadata
 Typical discovery flow:
 
 - `list_dir` is the primary discovery tool for any file type or use case. Use it first when you need to discover, filter, or narrow down files.
-- Once you know the exact path set, switch to `read_text_file` for one file or `read_many_files` for a batch.
+- Once you know the exact path set, switch to `read_files` — it is the single tool for reading file content, used for both one file and batches (pass a `files` array with one or more entries).
 - Prefer full-file reads whenever practical so the Source of Truth receives the whole authoritative file snapshot.
 - Use line-range reads (`start_line`/`end_line`) for targeted inspection of specific sections — for example, following up on a search result or examining a known function.
 
@@ -191,11 +191,13 @@ When to use `list_dir` vs `search_code`:
 
 Typical code exploration flow:
 
-- `search_code` to find where a symbol, function, or pattern is used → `read_text_file` with `start_line`/`end_line` to inspect the surrounding code → `edit_file` or `apply_text_edits` to make changes.
+- `search_code` to find where a symbol, function, or pattern is used → `read_files` with `start_line`/`end_line` (per-entry) to inspect the surrounding code → `edit_file` or `apply_text_edits` to make changes.
 
-## File Reading Tools (`read_text_file`, `read_many_files`)
+## File Reading Tool (`read_files`)
 
-`read_text_file` reads one file. `read_many_files` batches multiple known paths into one call.
+`read_files` is the single tool for reading file content into the SoT. It accepts a `files` array — pass a one-element array for a single file, or several entries to batch multiple known paths into the same call. There is no separate single-file reader.
+
+Each `files[]` entry takes `path`, optional `start_line`/`end_line` for UTF-8 text excerpts, and optional `pages`/`password` for PDFs. Files are read independently; partial failures return per-file error entries instead of aborting the whole batch.
 
 Text file behavior:
 
@@ -265,7 +267,7 @@ Example `sot.toml` MCP entry:
 The Source of Truth injected into the prompt is a combination of two memory layers:
 
 - **Session-backed (Permanent):** Comes from the persisted `session.json`. These are core files (like preprompts, schemas, or main guidelines) that are refreshed and injected at the start of _every_ turn in that session. Managed via `attach_path_to_source` or the CLI `sot_attach`.
-- **Tool-backed (Ephemeral):** Appeared because the model actively read them during the current conversation (e.g., via `read_text_file` to fix a specific bug). They live in memory to provide immediate context but can be easily discarded using `detach_path_from_source` once the task is done to save tokens.
+- **Tool-backed (Ephemeral):** Appeared because the model actively read them during the current conversation (e.g., via `read_files` to fix a specific bug). They live in memory to provide immediate context but can be easily discarded using `detach_path_from_source` once the task is done to save tokens.
 
 ### SoT management tools
 
@@ -307,6 +309,6 @@ Change runtime parameters for future turns in the current session: `title`, `pro
 
 1. Resume/recovery currently depends on reconstructing `chat_history` and SoT state from persisted request/response artifacts.
 2. `edit_file` makes a single exact-match replacement per call. `apply_text_edits` batches multiple edits (text matching or line ranges) atomically in one call. Neither is a regex engine nor an AST editor.
-3. `read_text_file` supports targeted line-range reads for any UTF-8 text file, but partial reads intentionally do not populate the SoT as full-file snapshots.
+3. `read_files` supports targeted line-range reads (per `files[]` entry) for any UTF-8 text file, but partial reads intentionally do not populate the SoT as full-file snapshots.
 4. `search_code` requires [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) to be installed and available in PATH.
 4. Archive files (`zip`, `tar`, `gz`, etc.) cannot be read directly. The model receives a format-specific error with the correct `run_command` invocation to list or extract contents.

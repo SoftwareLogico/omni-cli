@@ -723,44 +723,7 @@ def _build_tool_result_summary(tool_result: Any) -> str:
 
     name = tool_result.name
 
-    if name == "read_text_file":
-        fpath = payload.get("path", "?")
-        ftype = payload.get("type", "text")
-        if ftype == "text":
-            if payload.get("partial") is True:
-                start_line = payload.get("start_line", "?")
-                end_line = payload.get("end_line", "?")
-                returned_lines = payload.get("returned_lines", "?")
-                total_lines = payload.get("total_lines", "?")
-                size = payload.get("size_bytes", "?")
-                content = payload.get("content", "")
-                header = (
-                    f"inspected {fpath} lines {start_line}-{end_line} "
-                    f"({returned_lines} returned, file has {total_lines} lines, {size} bytes)"
-                )
-                if content:
-                    return f"{header}\n{content}"
-                return header
-            lines = payload.get("total_lines", "?")
-            size = payload.get("size_bytes", "?")
-            return f"read {fpath} ({lines} lines, {size} bytes) -> added to SoT"
-        elif ftype == "image":
-            return f"read image {fpath} ({payload.get('original_size_bytes', '?')} bytes) -> added to SoT"
-        elif ftype == "pdf":
-            return f"read pdf {fpath} ({payload.get('page_count', '?')} pages) -> added to SoT"
-        elif ftype == "notebook":
-            return f"read notebook {fpath} ({payload.get('cell_count', '?')} cells) -> added to SoT"
-        elif ftype == "audio":
-            return f"read audio {fpath} ({payload.get('size_bytes', '?')} bytes) -> added to SoT"
-        elif ftype == "video":
-            return f"read video {fpath} ({payload.get('size_bytes', '?')} bytes) -> added to SoT"
-        elif ftype == "file_unchanged":
-            return f"unchanged {fpath}"
-        elif ftype == "file_in_sot":
-            return f"{fpath} already in SoT — look at the '=== SOURCE OF TRUTH ===' block, do not re-read"
-        return f"read {fpath} type={ftype}"
-
-    if name == "read_many_files":
+    if name == "read_files":
         result_count = payload.get("result_count", "?")
         success_count = payload.get("success_count", "?")
         error_count = payload.get("error_count", "?")

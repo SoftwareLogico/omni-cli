@@ -45,8 +45,8 @@ The user asks the model to read a file. The system executes the tool, reads the 
 [
   { "role": "system", "content": "You are the main assistant..." },
   { "role": "user", "content": "review this file /path/to/file.js" },
-  { "role": "assistant", "content": null, "tool_calls": [{ "name": "read_text_file", "args": { "path": "/path/to/file.js" } }] },
-  { "role": "tool", "content": "read /path/to/file.js (1 line, 30 bytes) -> added to SoT" },
+  { "role": "assistant", "content": null, "tool_calls": [{ "name": "read_files", "args": { "files": [{ "path": "/path/to/file.js" }] } }] },
+  { "role": "tool", "content": "batch read 1/1 ok (0 errors) -> SoT updated" },
   {
     "role": "user",
     "content": [
@@ -74,8 +74,8 @@ The model calls the `edit_file` tool. The system applies the change to the file 
 [
   { "role": "system", "content": "You are the main assistant..." },
   { "role": "user", "content": "review this file /path/to/file.js" },
-  { "role": "assistant", "content": null, "tool_calls": [{ "name": "read_text_file", "args": { "path": "/path/to/file.js" } }] },
-  { "role": "tool", "content": "read /path/to/file.js (1 line, 30 bytes) -> added to SoT" },
+  { "role": "assistant", "content": null, "tool_calls": [{ "name": "read_files", "args": { "files": [{ "path": "/path/to/file.js" }] } }] },
+  { "role": "tool", "content": "batch read 1/1 ok (0 errors) -> SoT updated" },
   { "role": "user", "content": "change it to say universe instead of world" },
   { "role": "assistant", "content": null, "tool_calls": [{ "name": "edit_file", "args": { "path": "/path/to/file.js", "old": "world", "new": "universe" } }] },
   { "role": "tool", "content": "update /path/to/file.js (replaced 1, now 33 bytes) -> SoT refreshed" },
