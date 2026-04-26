@@ -9,6 +9,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from sot_cli.config.app import MCPServerConfig
 
+
 class MCPManager:
     def __init__(self, servers_config: dict[str, MCPServerConfig]):
         self.servers_config = servers_config
@@ -22,14 +23,14 @@ class MCPManager:
         if self._started:
             return
         self._started = True
-        
+
         for name, config in self.servers_config.items():
             try:
                 env = os.environ.copy()
                 env.update(config.env)
 
                 command = self._resolve_command(config.command)
-                
+
                 server_params = StdioServerParameters(
                     command=command,
                     args=config.args,
@@ -54,7 +55,9 @@ class MCPManager:
                         }
                     })
             except Exception as e:
-                print(f"\n[Warning] Failed to start MCP server '{name}': {e}")
+                # Log visible en stderr en vez de ocultarse en print bufferizado
+                sys.stderr.write(f"\n[Warning] Failed to start MCP server '{name}': {e}\n")
+                sys.stderr.flush()
 
     def _resolve_command(self, command: str) -> str:
         normalized = command.strip()
@@ -81,15 +84,15 @@ class MCPManager:
 
         original_tool_name = name[len(server_name) + 2:]
         result = await session.call_tool(original_tool_name, arguments)
-        
+
         if result.isError:
             raise RuntimeError(f"MCP Tool Error: {result.content}")
-        
+
         text_parts = []
         for item in result.content:
             if item.type == "text":
                 text_parts.append(item.text)
             else:
                 text_parts.append(f"[{item.type} content]")
-        
+
         return {"mcp_output": "\n".join(text_parts)}

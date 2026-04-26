@@ -40,12 +40,16 @@ def _normalize_application(value: Any, root_dir: Path) -> str | None:
 
 
 def _spawn(command: list[str]) -> int:
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    kwargs: dict[str, Any] = {
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        kwargs["start_new_session"] = True
+
+    process = subprocess.Popen(command, **kwargs)
     return process.pid
 
 
@@ -122,7 +126,8 @@ def _macos_app_candidates() -> list[tuple[str, str]]:
     for root in search_roots:
         if not root.exists():
             continue
-        for app in root.rglob("*.app"):
+        # Limit search to depth 2 to avoid scanning inside .app bundles
+        for app in list(root.glob("*.app")) + list(root.glob("*/*.app")):
             key = str(app)
             if key in seen:
                 continue
@@ -346,12 +351,14 @@ def _open_on_windows(path: Path, application: str | None) -> dict[str, Any]:
     if executable is None:
         raise _missing_application_error(path, application)
     command = [executable, str(path)]
-    process = subprocess.Popen(
-        command,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-    )
+
+    kwargs: dict[str, Any] = {
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+    }
+
+    process = subprocess.Popen(command, **kwargs)
     return {
         "path": str(path),
         "application": application,

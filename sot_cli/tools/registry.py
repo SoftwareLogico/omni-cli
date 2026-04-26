@@ -16,7 +16,7 @@ from sot_cli.tools.editor.edit import execute_edit_file
 from sot_cli.tools.editor.write import execute_write_file
 from sot_cli.tools.fs.delete import execute_delete_file
 from sot_cli.tools.fs.list_dir import execute_list_dir
-from sot_cli.tools.reader.main import execute_read_many_files, execute_read_text_file
+from sot_cli.tools.reader.main import execute_read_many_files
 from sot_cli.tools.search.search_code import execute_search_code
 from sot_cli.tools.session.control import (
     execute_attach_path,
@@ -58,11 +58,13 @@ class ToolRegistry:
         schemas = get_tool_schemas()
         if self.disable_delegation:
             schemas = [schema for schema in schemas if schema.get("function", {}).get("name") != "delegate_task"]
-        # Extend with MCP-provided tool schemas
+       
         try:
             schemas.extend(self.runtime.mcp.get_tool_schemas())
-        except Exception:
-            pass
+        except Exception as exc:
+            import sys
+            sys.stderr.write(f"\n[Warning] Failed to load MCP schemas: {exc}\n")
+            sys.stderr.flush()
         return schemas
 
     async def execute_tool_call(self, tool_call: dict[str, Any]) -> tuple[str, ToolExecutionResult]:
@@ -85,8 +87,7 @@ class ToolRegistry:
 
         handlers = {
             "list_dir": self._list_dir,
-            "read_text_file": self._read_text_file,
-            "read_many_files": self._read_many_files,
+            "read_files": self._read_files,
             "search_code": self._search_code,
             "open_path": self._open_path,
             "run_command": self._run_command,
@@ -176,22 +177,7 @@ class ToolRegistry:
     def _list_dir(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return execute_list_dir(arguments, self.runtime.paths.root_dir)
 
-    def _read_text_file(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return execute_read_text_file(
-            arguments,
-            root_dir=self.runtime.paths.root_dir,
-            read_cache=self._read_cache,
-            binary_check_size=self.runtime.config.tools.binary_check_size,
-            supports_images=self.capability.supports_images,
-            supports_pdf=self.capability.supports_pdfs,
-            supports_audio=self.capability.supports_audio,
-            supports_video=self.capability.supports_video,
-            file_unchanged_stub=FILE_UNCHANGED_STUB,
-            sot_state=self.sot_state,
-            file_in_sot_stub=FILE_IN_SOT_STUB,
-        )
-
-    def _read_many_files(self, arguments: dict[str, Any]) -> dict[str, Any]:
+    def _read_files(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return execute_read_many_files(
             arguments,
             root_dir=self.runtime.paths.root_dir,

@@ -253,7 +253,7 @@ def execute_search_code(
     `sot.toml`; the `FALLBACK_SEARCH_*` constants are kept only for direct
     library usage or tests that bypass the registry.
     """
-    pattern = _require_string(arguments, "pattern")
+    pattern = _require_string(arguments, "pattern", strip=False)
     raw_path = arguments.get("path")
     glob_filter = arguments.get("glob")
     file_type = arguments.get("type")

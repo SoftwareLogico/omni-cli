@@ -4,11 +4,11 @@ from typing import Any
 
 
 
-def _require_string(arguments: dict[str, Any], key: str) -> str:
+def _require_string(arguments: dict[str, Any], key: str, strip: bool = True) -> str:
     value = arguments.get(key)
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{key} must be a non-empty string")
-    return value.strip()
+    return value.strip() if strip else value
 
 
 def _require_string_allow_empty(arguments: dict[str, Any], key: str) -> str:
@@ -46,8 +46,8 @@ def _normalize_float(value: Any, field_name: str) -> float:
         normalized = float(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field_name} must be a number") from exc
-    if not (-0.0000001 <= normalized <= 2.0000001):
-        raise ValueError(f"{field_name} must be between 0 and 2")
+    if not (0.0 <= normalized <= 2.0):
+        raise ValueError(f"{field_name} must be between 0.0 and 2.0")
     return normalized
 
 

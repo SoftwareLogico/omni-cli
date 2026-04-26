@@ -23,10 +23,6 @@ DELEGATED_TASK_WRAPPER = """Delegated sub-agent execution rules:
 
 Task:
 """
-# NOTE: This module now only prepares agent folders and launches the `run_task`
-# CLI primitive. Response generation and usage reporting is handled by
-# `sot_cli.cli._run_task`, which writes `response.md` in the agent folder.
-
 
 def _write_response_md(
     parent_session_dir: Path,
@@ -101,17 +97,24 @@ def execute_delegate_task(arguments: dict[str, Any], runtime: AppRuntime, parent
     background = bool(arguments.get("background", False))
     wrapped_task_prompt = DELEGATED_TASK_WRAPPER.replace("{attempts}", str(attempts)) + task_prompt.strip()
 
-    # 1. Definir la carpeta de agentes del padre
+
     agents_dir = runtime.paths.sessions_dir / parent_session_id / "agents"
     agents_dir.mkdir(parents=True, exist_ok=True)
 
-    # 2. Generar agent_id (agent_1, agent_2...)
-    existing = [d.name for d in agents_dir.iterdir() if d.is_dir() and d.name.startswith("agent_")]
-    agent_id = f"agent_{len(existing) + 1}"
+
+    existing_nums: list[int] = []
+    for d in agents_dir.iterdir():
+        if d.is_dir() and d.name.startswith("agent_"):
+            try:
+                existing_nums.append(int(d.name.split("_")[1]))
+            except (ValueError, IndexError):
+                pass
+    next_num = max(existing_nums) + 1 if existing_nums else 1
+    agent_id = f"agent_{next_num}"
 
     parent_session = runtime.sessions.load(parent_session_id)
 
-    # 3. Crear la sesión del agente dentro de la carpeta agents/ del padre
+
     original_sessions_dir = runtime.sessions.sessions_dir
     runtime.sessions.sessions_dir = agents_dir
     try:
@@ -120,9 +123,7 @@ def execute_delegate_task(arguments: dict[str, Any], runtime: AppRuntime, parent
             provider=arguments.get("provider") or parent_session.provider,
             model=parent_session.model,
         )
-        # Alinear el ID interno con el nombre de la carpeta (agent_1)
         old_dir = agents_dir / temp_session.id
-        # Update session id so internal metadata matches the readable folder name
         temp_session.id = agent_id
         runtime.sessions.save(temp_session)
 
@@ -131,7 +132,6 @@ def execute_delegate_task(arguments: dict[str, Any], runtime: AppRuntime, parent
             if old_dir.exists():
                 shutil.rmtree(old_dir)
         except Exception:
-            # Best-effort cleanup; if it fails, proceed anyway
             pass
         new_agent_dir = agents_dir / agent_id
     finally:
@@ -139,7 +139,7 @@ def execute_delegate_task(arguments: dict[str, Any], runtime: AppRuntime, parent
 
     # 4. Preparar comando y entorno
     env = os.environ.copy()
-    env["SOT_SESSIONS_DIR"] = str(agents_dir)  # El hijo verá esta carpeta como su raíz de sesiones
+    env["SOT_SESSIONS_DIR"] = str(agents_dir)
 
     command = [
         sys.executable, "-m", "sot_cli",
@@ -147,29 +147,26 @@ def execute_delegate_task(arguments: dict[str, Any], runtime: AppRuntime, parent
         "run_task", agent_id, wrapped_task_prompt,
     ]
 
-    # Ensure agent folder exists and open agent.log to capture child output
     new_agent_dir.mkdir(parents=True, exist_ok=True)
-    log_file = open(new_agent_dir / "agent.log", "w")
 
-    if background:
-        subprocess.Popen(
-            command,
-            cwd=str(runtime.paths.root_dir),
-            env=env,
-            start_new_session=True,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-        )
-        log_file.close()
-        return {"status": "started", "agent_id": agent_id}
+    popen_kwargs: dict[str, Any] = {
+        "cwd": str(runtime.paths.root_dir),
+        "env": env,
+        "stderr": subprocess.STDOUT,
+    }
 
-    # Sincrónico
-    subprocess.run(
-        command,
-        cwd=str(runtime.paths.root_dir),
-        env=env,
-        stdout=log_file,
-        stderr=subprocess.STDOUT,
-    )
-    log_file.close()
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    else:
+        popen_kwargs["start_new_session"] = True
+
+    # Uso de with open para garantizar cierre del descriptor incluso si Popen/run lanza
+    with open(new_agent_dir / "agent.log", "w") as log_file:
+        popen_kwargs["stdout"] = log_file
+        if background:
+            subprocess.Popen(command, **popen_kwargs)
+            return {"status": "started", "agent_id": agent_id}
+
+        subprocess.run(command, **popen_kwargs)
+
     return {"status": "completed", "agent_id": agent_id}

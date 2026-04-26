@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 import json
+import os
 import uuid
 
 
@@ -67,7 +68,12 @@ class SessionStore:
     def list_sessions(self) -> list[SessionRecord]:
         records: list[SessionRecord] = []
         for session_file in sorted(self.sessions_dir.glob("*/session.json")):
-            records.append(self._read(session_file))
+            try:
+                records.append(self._read(session_file))
+            except Exception:
+                # Skip corrupted/unreadable session files instead of crashing
+                # the entire listing — one bad file should not block the rest.
+                continue
         return sorted(records, key=lambda item: item.updated_at, reverse=True)
 
     def load(self, session_id: str) -> SessionRecord:
@@ -79,10 +85,14 @@ class SessionStore:
     def save(self, record: SessionRecord) -> None:
         session_dir = self._session_dir(record.id)
         session_dir.mkdir(parents=True, exist_ok=True)
-        self._session_file(record.id).write_text(
+        target_file = self._session_file(record.id)
+        temp_file = target_file.with_suffix(".tmp")
+
+        temp_file.write_text(
             json.dumps(asdict(record), ensure_ascii=True, indent=2),
             encoding="utf-8",
         )
+        os.replace(temp_file, target_file)
 
     def attach_path(
         self,
@@ -208,7 +218,11 @@ class SessionStore:
         return self._session_dir(session_id) / "session.json"
 
     def _read(self, path: Path) -> SessionRecord:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Session file is corrupted: {path}") from exc
+
         entries = [
             SourceEntry(
                 id=entry["id"],

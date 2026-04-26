@@ -15,7 +15,6 @@ from sot_cli.config.prompts import (
     LIST_COMMANDS_PROMPT,
     LIST_TASKS_PROMPT,
     OPEN_PATH_PROMPT,
-    READ_FILE_PROMPT,
     READ_COMMAND_OUTPUT_PROMPT,
     READ_MANY_FILES_PROMPT,
     RUN_COMMAND_PROMPT,
@@ -60,26 +59,7 @@ def get_tool_schemas() -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
-                "name": "read_text_file",
-                "description": READ_FILE_PROMPT,
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "Absolute path or project-relative path to the file."},
-                        "start_line": {"type": "integer", "minimum": 1, "description": "1-indexed starting line for a targeted text excerpt. Use with end_line to read a specific range."},
-                        "end_line": {"type": "integer", "minimum": 1, "description": "1-indexed ending line (inclusive) for a targeted text excerpt. Must be used together with start_line."},
-                        "pages": {"type": "string", "description": "Optional PDF page range like '1-5' or '3'. Only valid for PDF files."},
-                        "password": {"type": "string", "description": "Optional password for encrypted/protected PDF files. If a PDF fails due to encryption, ask the user for the password and retry with this parameter."},
-                    },
-                    "required": ["path"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "read_many_files",
+                "name": "read_files",
                 "description": READ_MANY_FILES_PROMPT,
                 "parameters": {
                     "type": "object",

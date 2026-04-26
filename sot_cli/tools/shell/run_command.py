@@ -138,16 +138,23 @@ def resolve_command_metadata_path(logs_dir: Path, session_id: str, command_id: s
 
 
 def load_command_metadata(metadata_path: Path) -> dict[str, Any]:
-    return json.loads(metadata_path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(metadata_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+
+        raise RuntimeError(f"Command metadata corrupted: {metadata_path}") from exc
 
 
 def update_command_metadata(metadata_path: Path, **updates: Any) -> dict[str, Any]:
     metadata = load_command_metadata(metadata_path)
     metadata.update(updates)
-    metadata_path.write_text(
+
+    temp_path = metadata_path.with_suffix(".tmp")
+    temp_path.write_text(
         json.dumps(metadata, ensure_ascii=True, indent=2),
         encoding="utf-8",
     )
+    os.replace(temp_path, metadata_path)
     return metadata
 
 
@@ -763,7 +770,7 @@ def execute_run_command(
     output_limit: int,
     default_command_timeout_seconds: int,
 ) -> dict[str, Any]:
-    command = _require_string(arguments, "command")
+    command = _require_string(arguments, "command", strip=False)
     if _looks_like_recursive_sot_invocation(command):
         raise ValueError("Recursive sot-cli invocation is not allowed from run_command. Use the current tools directly.")
     cwd_value = arguments.get("cwd")
