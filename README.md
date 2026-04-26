@@ -5,11 +5,13 @@
 [![Stars](https://img.shields.io/github/stars/softwarelogico/sot-cli?style=social)](https://github.com/softwarelogico/sot-cli)
 [![License](https://img.shields.io/github/license/SoftwareLogico/sot-cli?style=flat&logo=mit)](LICENSE)
 
+## ▶️ Watch it Work
+
 <p align="center">
     <a href="https://youtu.be/9h20O_aH6vs" title="sot-cli in action: True AI OS Control (Zero Guardrails)">
-    <img src="https://img.youtube.com/vi/9h20O_aH6vs/maxresdefault.jpg" alt="sot-cli Demo" />
+    <img src="https://img.youtube.com/vi/9h20O_aH6vs/maxresdefault.jpg" alt="▶️ sot-cli Demo — Click to watch the video" />
   </a>
-  <br><strong>Token-efficient terminal powerhouse: SoT Method + Multi-Agent + Unrestricted Tools.</strong>
+  <br><strong>🎥 Click the thumbnail above to watch the demo video</strong>
 </p>
 <p align="center">
 
