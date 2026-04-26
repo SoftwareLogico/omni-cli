@@ -810,8 +810,13 @@ def _build_tool_result_summary(tool_result: Any) -> str:
             entry_path = str(entry.get("path") or entry.get("relative_path") or entry.get("name") or "?").strip()
             entry_kind = str(entry.get("kind") or "?").strip()
             entry_size = entry.get("size_bytes")
+            # Surface the blocked_by_os flag inline so the model knows that
+            # an empty/unreadable directory was a permissions problem and
+            # not just genuinely empty — avoids wasted retries.
+            blocked = entry.get("blocked_by_os")
+            status_text = " [Blocked by OS]" if blocked else ""
             size_text = f"{entry_size} bytes" if isinstance(entry_size, int) else "size unknown"
-            summary_lines.append(f"- {entry_path} ({entry_kind}, {size_text})")
+            summary_lines.append(f"- {entry_path} ({entry_kind}, {size_text}){status_text}")
 
         if count > 20:
             summary_lines.append(f"... and {count - 20} more entries.")

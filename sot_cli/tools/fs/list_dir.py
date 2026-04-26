@@ -291,6 +291,17 @@ def execute_list_dir(arguments: dict[str, Any], root_dir: Path) -> dict[str, Any
             kind = classify(child)
             extension = child.suffix.lower()
 
+            # Probe directory readability up-front. If the OS will deny our
+            # scandir() call, mark the entry so the LLM sees [Blocked by OS]
+            # in the summary and we skip recursion further down.
+            blocked_by_os = False
+            if kind in {"directory", "symlink_directory"}:
+                try:
+                    with os.scandir(child):
+                        pass
+                except (PermissionError, OSError):
+                    blocked_by_os = True
+
             entry = {
                 "name": child.name,
                 "relative_path": child.relative_to(path).as_posix(),
@@ -310,6 +321,7 @@ def execute_list_dir(arguments: dict[str, Any], root_dir: Path) -> dict[str, Any
                 "accessed_at": accessed_at,
                 "created": created_at,
                 "created_at": created_at,
+                "blocked_by_os": blocked_by_os,
             }
             if child.is_symlink():
                 try:
@@ -345,7 +357,9 @@ def execute_list_dir(arguments: dict[str, Any], root_dir: Path) -> dict[str, Any
             should_recurse = child.is_dir()
             if child.is_symlink() and not follow_symlinks:
                 should_recurse = False
-            if should_recurse:
+            # Skip directories the OS already told us we can't read — saves a
+            # redundant iterdir() that would just return [] anyway.
+            if should_recurse and not blocked_by_os:
                 collect(child, depth + 1)
 
     collect(path, 1)
