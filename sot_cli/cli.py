@@ -195,8 +195,9 @@ def _load_chat_history_from_request_jsons(session_dir: Path) -> list[dict[str, A
     if not messages:
         return None
 
-    # Extract chat_history: skip system prompt, SoT blocks, and orchestration rules
-    # (orchestration rules are ephemeral — the runtime injects fresh ones each turn)
+    # Extract chat_history: skip system prompt, SoT blocks, orchestration rules,
+    # and CURRENT METADATA blocks (all ephemeral — the runtime re-injects fresh
+    # versions each turn; persisting them in chat_history would duplicate them).
     chat_messages: list[dict[str, Any]] = []
     for msg in messages:
         role = msg.get("role", "")
@@ -206,6 +207,8 @@ def _load_chat_history_from_request_jsons(session_dir: Path) -> list[dict[str, A
         if role == "user" and is_sot_block_content(content):
             continue
         if role == "user" and is_orchestration_rules_content(content):
+            continue
+        if role == "user" and isinstance(content, str) and content.startswith("=== CURRENT METADATA ==="):
             continue
         chat_messages.append(msg)
 
@@ -279,6 +282,238 @@ def _replay_conversation(history: list[dict[str, Any]]) -> None:
             content = msg.get("content", "")
             console.print(f"[dim]tool> {content}[/dim]")
     console.print("[dim]─── end of history ───[/dim]\n")
+
+
+def _save_last_turn_metadata(
+    session_dir: Path,
+    snapshot: dict[str, Any],
+    render_extras: dict[str, Any] | None = None,
+) -> None:
+    """Persist the per-turn meta_snapshot to session_dir/turn_metadata.json.
+
+    The file uses a wrapper shape::
+
+        {
+            "snapshot": <slim dict for CURRENT METADATA injection>,
+            "render":   <rich raw fields used ONLY when rebuilding the
+                         resumed Turn Summary table — file lists, agent
+                         statuses, raw context numbers, etc.>
+        }
+
+    The split keeps the model-bound CURRENT METADATA block lean (so the LLM
+    doesn't see noisy lists every turn) while still giving the resumed
+    banner enough data to reproduce the live Turn Summary 1:1.
+
+    Failures are swallowed: a missing/unwritable file must never abort a
+    successful turn.
+    """
+    try:
+        session_dir.mkdir(parents=True, exist_ok=True)
+        target = session_dir / "turn_metadata.json"
+        wrapper = {"snapshot": snapshot, "render": render_extras or {}}
+        target.write_text(
+            json.dumps(wrapper, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except (OSError, TypeError, ValueError):
+        return
+
+
+def _load_last_turn_metadata(session_dir: Path) -> dict[str, Any] | None:
+    """Recover the previous turn's metadata as ``{"snapshot": ..., "render": ...}``.
+
+    Strategy:
+
+    1. Prefer ``turn_metadata.json`` (written at end of each turn — exact).
+       Supports both the new wrapper shape and the legacy flat-dict shape
+       written by earlier builds (auto-wrapped on read).
+    2. Fall back to parsing the ``=== CURRENT METADATA ===`` user message
+       embedded in the most recent ``request.json``. That block represents
+       the turn-before-last (CURRENT METADATA always describes the turn
+       that just FINISHED relative to the request being sent), so it's a
+       best-effort approximation for sessions persisted before
+       ``turn_metadata.json`` existed. ``render`` is empty in this case;
+       the table degrades gracefully (no per-file or per-agent rows).
+    """
+    target = session_dir / "turn_metadata.json"
+    if target.exists():
+        try:
+            data = json.loads(target.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                if "snapshot" in data and isinstance(data["snapshot"], dict):
+                    return {
+                        "snapshot": data["snapshot"],
+                        "render": data.get("render") if isinstance(data.get("render"), dict) else {},
+                    }
+                if data:
+                    # Legacy: flat dict written before the wrapper existed.
+                    return {"snapshot": data, "render": {}}
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    request_path = session_dir / "request.json"
+    if not request_path.exists():
+        return None
+    try:
+        request_data = json.loads(request_path.read_text(encoding="utf-8"))
+        messages = request_data.get("payload", {}).get("messages", [])
+    except (json.JSONDecodeError, OSError, AttributeError):
+        return None
+    if not isinstance(messages, list):
+        return None
+
+    for msg in reversed(messages):
+        if not isinstance(msg, dict) or msg.get("role") != "user":
+            continue
+        content = msg.get("content", "")
+        if not isinstance(content, str) or not content.startswith("=== CURRENT METADATA ==="):
+            continue
+        body = content
+        for marker in ("=== CURRENT METADATA ===", "=== END CURRENT METADATA ==="):
+            body = body.replace(marker, "")
+        body = body.strip()
+        snap: dict[str, Any] = {}
+        for pair in body.split(";"):
+            pair = pair.strip()
+            if not pair or ":" not in pair:
+                continue
+            key, _, val = pair.partition(":")
+            snap[key.strip()] = val.strip()
+        if snap:
+            return {"snapshot": snap, "render": {}}
+
+    return None
+
+
+def _render_resumed_summary(
+    snapshot: dict[str, Any],
+    render_extras: dict[str, Any],
+    session_id: str,
+) -> None:
+    """Reproduce the live Turn Summary table from a saved snapshot.
+
+    Mirrors the layout of the post-turn table in :func:`_run_command_turn`
+    so the user sees the *same* rows on resume — including the SoT file
+    list, the context bar with color/warnings, and per-agent statuses —
+    not just a flat key/value dump. Falls back to the slim string form
+    when only the legacy snapshot is available (no render bundle).
+    """
+    if not snapshot and not render_extras:
+        return
+
+    table = Table(title="Last Turn Summary & Usage (restored)")
+    table.add_column("Metric")
+    table.add_column("Value", justify="right")
+    table.add_row("Session ID", str(snapshot.get("Session ID", session_id)))
+
+    main_tokens = snapshot.get("Main Agent Tokens")
+    if main_tokens not in (None, ""):
+        table.add_row("Main Agent Tokens", str(main_tokens))
+    delegated = snapshot.get("Sub-Agents Tokens")
+    if delegated:
+        table.add_row("Sub-Agents Tokens", str(delegated))
+    total = snapshot.get("Total Tokens")
+    if total not in (None, ""):
+        table.add_row("Total Tokens", str(total), style="bold cyan")
+    cost = snapshot.get("Total Cost")
+    if cost:
+        table.add_row("Total Cost", str(cost), style="bold green")
+
+    # Reconstruct the context-usage bar from raw numbers persisted in the
+    # render bundle. Mirrors the live renderer in _run_command_turn (same
+    # 10-cell █/░ bar, same green/yellow/red thresholds, same warning copy).
+    ctx_pct = render_extras.get("ctx_pct")
+    ctx_prompt = render_extras.get("ctx_prompt")
+    ctx_max = render_extras.get("ctx_max")
+    ctx_label = render_extras.get("ctx_label") or "Context Limit"
+    if (
+        isinstance(ctx_pct, (int, float))
+        and isinstance(ctx_max, (int, float))
+        and ctx_max > 0
+    ):
+        pct = int(ctx_pct)
+        filled = int((pct / 100) * 10)
+        bar = "█" * filled + "░" * (10 - filled)
+        color = "red" if pct > 90 else "yellow" if pct > 75 else "green"
+        prompt_n = int(ctx_prompt) if isinstance(ctx_prompt, (int, float)) else 0
+        table.add_row(
+            ctx_label,
+            f"[{color}]{bar} {pct}% ({prompt_n}/{int(ctx_max)})[/{color}]",
+        )
+        if pct >= 90:
+            table.add_row(
+                "Warning",
+                "[bold red]⚠️ Context almost full! Ask the model to remove some not used SoT files (If Any) [/bold red]",
+            )
+        elif pct >= 75:
+            table.add_row(
+                "Warning",
+                "[bold yellow]⚠️ Context is getting full. Consider detaching unused files.[/bold yellow]",
+            )
+    elif snapshot.get("Context"):
+        # Legacy snapshots only have the pre-formatted "88% (x/y)" string.
+        table.add_row("Context", str(snapshot["Context"]))
+
+    sot_files = render_extras.get("sot_files") or []
+    if isinstance(sot_files, list) and sot_files:
+        try:
+            table.add_section()
+        except Exception:
+            pass
+        table.add_row(
+            "SoT Tracked Files",
+            "Always updated in real time => " + str(len(sot_files)),
+            style="bold magenta",
+        )
+        for fpath in sorted(str(p) for p in sot_files):
+            fname = Path(fpath).name
+            table.add_row(f"  📄 {fname}", "[dim]in context[/dim]")
+    elif snapshot.get("SoT Tracked Files"):
+        # Legacy: only the count survived.
+        try:
+            table.add_section()
+        except Exception:
+            pass
+        table.add_row(
+            "SoT Tracked Files",
+            str(snapshot["SoT Tracked Files"]),
+            style="bold magenta",
+        )
+
+    agents = render_extras.get("agents") or []
+    if isinstance(agents, list) and agents:
+        try:
+            table.add_section()
+        except Exception:
+            pass
+        table.add_row("Agents Used", str(len(agents)))
+        for entry in agents:
+            if isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                name, status = entry[0], entry[1]
+            elif isinstance(entry, dict):
+                name = entry.get("name", "?")
+                status = entry.get("status", "UNKNOWN")
+            else:
+                continue
+            color = "green" if str(status).upper() == "SUCCESS" else "red"
+            table.add_row(f"  {name}", f"[{color}]{status}[/{color}]")
+    elif snapshot.get("Agents Used"):
+        try:
+            table.add_section()
+        except Exception:
+            pass
+        table.add_row("Agents Used", str(snapshot["Agents Used"]))
+
+    try:
+        table.add_section()
+    except Exception:
+        pass
+    if snapshot.get("Timestamp"):
+        table.add_row("Timestamp", str(snapshot["Timestamp"]))
+    if snapshot.get("Turn Duration"):
+        table.add_row("Turn Duration", str(snapshot["Turn Duration"]), style="bold yellow")
+
+    console.print(table)
 
 
 # ── First-run setup & provider selector ─────────────────────────────────
@@ -1341,6 +1576,34 @@ async def _run_command_turn(
         meta_snapshot["launch_context"] = detect_launch_context()
         conversation_state.last_turn_metadata = meta_snapshot
 
+        # Build the rich render bundle — full file list, agent statuses, raw
+        # context numbers — so a resumed session can rebuild this exact table
+        # (bar, per-file rows, per-agent rows). These fields are deliberately
+        # kept OUT of meta_snapshot to avoid bloating the CURRENT METADATA
+        # block injected to the model on the next turn.
+        render_extras: dict[str, Any] = {
+            "sot_files": sorted(sot_files) if sot_files else [],
+            "agents": [list(t) for t in agent_statuses] if agent_statuses else [],
+        }
+        if ctx_len and ctx_len > 0 and isinstance(latest_prompt_tokens, (int, float)):
+            render_extras["ctx_pct"] = min(100, int((latest_prompt_tokens / ctx_len) * 100))
+            render_extras["ctx_prompt"] = int(latest_prompt_tokens)
+            render_extras["ctx_max"] = int(ctx_len)
+            render_extras["ctx_label"] = (
+                "Context Limit (Allocated)"
+                if adapter.capability.allocated_context_length
+                else "Context Limit (Max)"
+            )
+
+        # Persist on disk so a resumed session can replay this exact snapshot
+        # in its banner AND seed the next turn's CURRENT METADATA injection
+        # without re-running the model.
+        _save_last_turn_metadata(
+            runtime.paths.sessions_dir / session_id,
+            meta_snapshot,
+            render_extras,
+        )
+
     return 0
 
 
@@ -1394,22 +1657,63 @@ async def _run_prompt(
 ) -> int:
     if session_id:
         record = runtime.sessions.load(session_id)
+
+        # Interactive provider selector when resuming from a TTY without an
+        # explicit --provider flag. Lets the user hot-swap providers between
+        # turns (e.g. local lmstudio → openrouter when the local box runs out
+        # of horsepower) without editing sot.toml or the session file.
+        if not provider_name and sys.stdin.isatty():
+            available = [name for name, cfg in runtime.config.providers.items() if cfg.enabled]
+            if len(available) > 1:
+                console.print(
+                    f"\n[dim]Resuming session [/dim][bold]{record.id}[/bold] "
+                    f"[dim](current provider: [/dim]"
+                    f"[bold yellow]{record.provider}[/bold yellow][dim])[/dim]"
+                )
+                provider_name = _select_provider_interactive(available, current_default=record.provider)
+
         updated_provider = provider_name or record.provider
         provider_config = runtime.config.provider(updated_provider)
+        provider_changed = updated_provider != record.provider
 
         if model_override:
             updated_model = model_override
-        else:
+        elif provider_changed:
+            # When switching providers, the old provider's model name is
+            # meaningless for the new one (e.g. an auto-resolved lmstudio
+            # model id won't exist on openrouter), so we always take the
+            # NEW provider's configured model from sot.toml. lmstudio /
+            # ollama are allowed to leave it empty — their adapters
+            # auto-resolve at runtime.
             updated_model = provider_config.model
             if not updated_model and updated_provider not in {"lmstudio", "ollama"}:
-                raise ValueError(f"Provider {updated_provider} has no default model configured. Pass --model explicitly.")
+                raise ValueError(
+                    f"Provider {updated_provider} has no default model configured. Pass --model explicitly."
+                )
+        else:
+            updated_model = provider_config.model or record.model
+            if not updated_model and updated_provider not in {"lmstudio", "ollama"}:
+                raise ValueError(
+                    f"Provider {updated_provider} has no default model configured. Pass --model explicitly."
+                )
 
-        if updated_provider != record.provider or updated_model != record.model:
-            record = runtime.sessions.update_session(
-                session_id,
-                provider=updated_provider,
-                model=updated_model,
-            )
+        update_kwargs: dict[str, Any] = {}
+        if provider_changed:
+            update_kwargs["provider"] = updated_provider
+            # Drop per-session overrides captured against the OLD provider's
+            # config (e.g. lmstudio/ollama may have stamped temperature and
+            # max_output_tokens from their local server's profile). Resetting
+            # to None forces prompting.prepare_turn_request to fall back to
+            # the NEW provider's [providers.X] defaults from sot.toml so the
+            # request stays valid (e.g. an output cap that exceeds a remote
+            # model's context window won't leak across).
+            update_kwargs["temperature"] = None
+            update_kwargs["max_output_tokens"] = None
+        if updated_model != record.model:
+            update_kwargs["model"] = updated_model
+
+        if update_kwargs:
+            record = runtime.sessions.update_session(session_id, **update_kwargs)
     else:
         provider = provider_name or runtime.config.runtime.primary_provider
         provider_config = runtime.config.provider(provider)
@@ -1577,6 +1881,19 @@ async def _run_prompt(
     loaded_sot = load_sot_state_from_request_json(session_dir)
     if loaded_sot is not None:
         session_state.sot = loaded_sot
+
+    # Restore the previous turn's Summary so the user sees "where we left off"
+    # AND so the next turn's CURRENT METADATA injection chain stays coherent.
+    # The wrapper splits the slim snapshot (used to seed the model-bound
+    # CURRENT METADATA block) from the rich render bundle (file list, agent
+    # statuses, raw context numbers) needed to rebuild the table 1:1.
+    loaded_meta = _load_last_turn_metadata(session_dir)
+    if loaded_meta:
+        loaded_snapshot = loaded_meta.get("snapshot") or {}
+        loaded_render = loaded_meta.get("render") or {}
+        if loaded_snapshot:
+            session_state.last_turn_metadata = loaded_snapshot
+        _render_resumed_summary(loaded_snapshot, loaded_render, record.id)
 
     try:
         while True:
