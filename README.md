@@ -46,7 +46,7 @@ cd sot-cli
 
 ```bash
 #uv
-uv venv <env_name> --python 3.10
+uv venv sot --python 3.10
 source <env_name>/bin/activate
 uv pip install -e .
 uv run sot-cli

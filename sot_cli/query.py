@@ -727,7 +727,54 @@ def _build_tool_result_summary(tool_result: Any) -> str:
         result_count = payload.get("result_count", "?")
         success_count = payload.get("success_count", "?")
         error_count = payload.get("error_count", "?")
-        return f"batch read {success_count}/{result_count} ok ({error_count} errors) -> SoT updated"
+        results = payload.get("results") or []
+
+        if not isinstance(results, list) or not results:
+            return f"batch read {success_count}/{result_count} ok ({error_count} errors) -> SoT updated"
+
+        lines = [f"batch read {success_count}/{result_count} ok ({error_count} errors):"]
+        for item in results[:20]:
+            if not isinstance(item, dict):
+                continue
+            if not item.get("ok"):
+                err_path = item.get("path", "?")
+                err_msg = str(item.get("error", "unknown")).strip().splitlines()[0][:160]
+                lines.append(f"- ERROR {err_path}: {err_msg}")
+                continue
+            fpath = item.get("path", "?")
+            ftype = item.get("type", "text")
+            if ftype == "text":
+                if item.get("partial") is True:
+                    lines.append(
+                        f"- inspected {fpath} lines {item.get('start_line', '?')}-{item.get('end_line', '?')} "
+                        f"({item.get('returned_lines', '?')} returned, file has {item.get('total_lines', '?')} lines, "
+                        f"{item.get('size_bytes', '?')} bytes)"
+                    )
+                else:
+                    lines.append(
+                        f"- read {fpath} ({item.get('total_lines', '?')} lines, "
+                        f"{item.get('size_bytes', '?')} bytes) -> SoT"
+                    )
+            elif ftype == "image":
+                lines.append(f"- read image {fpath} ({item.get('original_size_bytes', '?')} bytes) -> SoT")
+            elif ftype == "pdf":
+                lines.append(f"- read pdf {fpath} ({item.get('page_count', '?')} pages) -> SoT")
+            elif ftype == "notebook":
+                lines.append(f"- read notebook {fpath} ({item.get('cell_count', '?')} cells) -> SoT")
+            elif ftype == "audio":
+                lines.append(f"- read audio {fpath} ({item.get('size_bytes', '?')} bytes) -> SoT")
+            elif ftype == "video":
+                lines.append(f"- read video {fpath} ({item.get('size_bytes', '?')} bytes) -> SoT")
+            elif ftype == "file_unchanged":
+                lines.append(f"- unchanged {fpath}")
+            elif ftype == "file_in_sot":
+                lines.append(f"- {fpath} already in SoT — see '=== SOURCE OF TRUTH ===' block, do not re-read")
+            else:
+                lines.append(f"- read {fpath} type={ftype}")
+
+        if len(results) > 20:
+            lines.append(f"... and {len(results) - 20} more entries.")
+        return "\n".join(lines)
 
     if name == "open_path":
         fpath = payload.get("path", "?")
