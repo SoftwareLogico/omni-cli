@@ -63,8 +63,24 @@ class OpenAICompatibleAdapter:
             await self._detect_ollama_capabilities()
         elif self.name == "nvidia":
             await self._detect_nvidia_capabilities()
+        elif self.name == "openai":
+            # OpenAI's /v1/models endpoint doesn't expose tool/modality flags or
+            # context windows in a useful shape, and the same `openai` provider
+            # is reused to talk to any OpenAI-compatible service (so probing
+            # would also be unreliable). We assume the optimistic defaults of
+            # current frontier OpenAI-style models: tools on, vision + PDFs on,
+            # 400k context. If a downstream model is more limited, the API
+            # itself will reject the unsupported feature at request time —
+            # which is the right place to surface that.
+            self.capability = ProviderCapability(
+                supports_tools=True,
+                supports_images=True,
+                supports_pdfs=True,
+                context_length=400_000,
+                modality="text+image->text",
+            )
         else:
-            # openai, xai — no public model-info endpoint; leave defaults (tools on by default for cloud)
+            # xai and other unknown OpenAI-compatible names — minimal default.
             self.capability = ProviderCapability(supports_tools=True)
         self._capabilities_detected = True
 
@@ -359,6 +375,39 @@ class OpenAICompatibleAdapter:
         )
 
 
+def _is_openai_reasoning_model(model: str) -> bool:
+    """Detect OpenAI reasoning-class models from their canonical name prefix.
+
+    Heuristic — OpenAI does not expose a programmatic capability flag for this,
+    and the wire-level differences are baked into model families:
+
+    - `gpt-5*` family (gpt-5, gpt-5-mini, gpt-5-nano, gpt-5.1, gpt-5.2,
+      gpt-5.4, gpt-5.5, gpt-5-pro, gpt-5.1-codex, gpt-5.1-codex-max,
+      gpt-5.1-codex-mini, plus dated variants like `gpt-5-nano-2025-08-07`).
+    - O-series: `o1`, `o1-mini`, `o1-preview`, `o3`, `o3-mini`, `o3-pro`,
+      `o4-mini`, dated variants like `o4-mini-2025-04-16`.
+
+    Non-reasoning OpenAI families (`gpt-4*`, `gpt-3.5-*`, `chatgpt-4o-*`)
+    return False so they keep getting `temperature` and skip `reasoning_effort`.
+
+    Returns False for empty/None inputs and for anything that doesn't match
+    the prefixes above (covers ad-hoc OpenAI-compatible deployments behind
+    the same `openai` adapter — those models are user-defined and we have no
+    way to know if they're reasoning-class, so we default to "treat as a
+    standard chat model").
+    """
+    if not model:
+        return False
+    m = model.lower().strip()
+    if m.startswith("gpt-5"):
+        return True
+    # o-series: name is `o<digit>` followed by either end-of-string, hyphen,
+    # or dot. Avoids false positives on names like `openai-...` or `oss-...`.
+    if len(m) >= 2 and m[0] == "o" and m[1].isdigit():
+        return len(m) == 2 or m[2] in "-."
+    return False
+
+
 def build_chat_completions_payload(request: ProviderRequest, resolved_model: str) -> dict[str, Any]:
     messages = request.conversation_messages or [
         {"role": "system", "content": request.system_prompt},
@@ -372,22 +421,128 @@ def build_chat_completions_payload(request: ProviderRequest, resolved_model: str
         },
     ]
 
+    is_openai = request.provider_name == "openai"
+    is_openrouter = request.provider_name == "openrouter"
+    # Only flips the wire-level treatment of OpenAI Chat Completions params.
+    # Not applied to openrouter even when routing an OpenAI reasoning model
+    # through it, because OpenRouter normalizes/strips unsupported params on
+    # its end before passing to upstream — so we must keep the universal
+    # OpenAI-compatible shape for openrouter.
+    openai_is_reasoning = is_openai and _is_openai_reasoning_model(resolved_model)
+
     payload: dict[str, Any] = {
         "model": resolved_model,
         "messages": messages,
-        "temperature": request.temperature,
         "stream": request.stream,
-        "max_tokens": request.max_output_tokens,
     }
+
+    # Output token cap field — OpenAI deprecated `max_tokens` chat-completions-
+    # wide and reasoning-class models reject it with HTTP 400
+    # `unsupported_parameter`. Use `max_completion_tokens` for openai
+    # unconditionally (non-reasoning openai models still accept the new name)
+    # and keep `max_tokens` for everyone else, since most OpenAI-compatible
+    # servers in the wild (vLLM, llama.cpp server, Ollama, LM Studio, NVIDIA
+    # NIM) only know the legacy field name.
+    if is_openai:
+        payload["max_completion_tokens"] = request.max_output_tokens
+    else:
+        payload["max_tokens"] = request.max_output_tokens
+
+    # Sampling parameters that OpenAI reasoning models reject (HTTP 400):
+    # temperature, top_p, presence_penalty, frequency_penalty, logprobs,
+    # top_logprobs, logit_bias. The codebase only sends `temperature` today,
+    # so that's the only one we have to gate. Skipping it for OpenAI's
+    # reasoning class lets the model use its baked-in default (effectively 1,
+    # but it's not even an addressable knob for these models). All other
+    # providers always get `temperature`.
+    if not openai_is_reasoning:
+        payload["temperature"] = request.temperature
 
     if request.stream:
         payload["stream_options"] = {"include_usage": True}
 
     if request.enable_tools and request.tools:
-        payload["tools"] = request.tools
+        tools = request.tools
+        if is_openai:
+            # OpenAI's tool-call validator rejects schemas that use
+            # oneOf/anyOf/allOf/not at the TOP LEVEL of `function.parameters`
+            # (HTTP 400: "schema must have type 'object' and not have ...").
+            # Other providers in this codebase (openrouter, lmstudio, ollama,
+            # nvidia) accept the same constructs without complaint, so we
+            # only sanitize for openai. The runtime tool handlers already
+            # enforce equivalent constraints in Python (e.g. `attach/detach
+            # path` raises ValueError when both `path` and `paths` are absent),
+            # so dropping these keys does not weaken correctness — it only
+            # removes a schema-level hint for the model, which is already
+            # described in the tool's natural-language description.
+            tools = [_sanitize_tool_schema_for_openai(t) for t in tools]
+        payload["tools"] = tools
         payload["tool_choice"] = "auto"
 
+    # Reasoning effort wire format diverges per provider — and OpenAI in
+    # particular rejects unknown top-level keys with HTTP 400, so we MUST NOT
+    # forward this field to anyone but the two providers that document it,
+    # AND only on models that actually accept it.
+    #
+    # - openai      → flat top-level field:  "reasoning_effort": "<level>"
+    #                 only valid on reasoning-class models (gpt-5/o-series).
+    #                 If the user left `reasoning_effort = "..."` in the toml
+    #                 but switched the model to a non-reasoning one, we
+    #                 silently strip the param so the call doesn't 400 —
+    #                 the user can re-enable by reverting the model. The
+    #                 codebase intentionally does not use the Responses API
+    #                 to keep SoT semantics intact, so the flat field is the
+    #                 only correct shape for this adapter.
+    # - openrouter  → nested object:         "reasoning": {"effort": "<level>"}
+    #                 OpenRouter's unified parameter; silently ignored on
+    #                 non-reasoning upstreams, so it's safe to always send
+    #                 when the user sets it.
+    #
+    # Any other provider (lmstudio, ollama, nvidia, xai) gets nothing — those
+    # never advertised reasoning_effort and would either ignore or 400.
+    if request.reasoning_effort:
+        if openai_is_reasoning:
+            payload["reasoning_effort"] = request.reasoning_effort
+        elif is_openrouter:
+            payload["reasoning"] = {"effort": request.reasoning_effort}
+
     return payload
+
+
+# Top-level keys forbidden by OpenAI inside `function.parameters`. The error
+# message from the API enumerates exactly these: "schema must have type
+# 'object' and not have 'oneOf'/'anyOf'/'allOf'/'enum'/'not' at the top level".
+# `enum` is included for completeness even though it's vanishingly rare on a
+# top-level parameters object (whose `type` is normally "object").
+_OPENAI_FORBIDDEN_TOP_LEVEL_SCHEMA_KEYS: frozenset[str] = frozenset(
+    {"oneOf", "anyOf", "allOf", "not", "enum"}
+)
+
+
+def _sanitize_tool_schema_for_openai(tool: dict[str, Any]) -> dict[str, Any]:
+    """Return a shallow-cloned copy of `tool` with the forbidden top-level
+    schema keys stripped from `function.parameters`.
+
+    Only the top level of `parameters` is touched. Constructs nested deeper
+    inside individual property schemas (e.g. a property whose schema uses
+    `enum`) are left alone — OpenAI accepts those. The original `tool` dict
+    is not mutated; sibling keys (`type`, `properties`, `required`,
+    `additionalProperties`, `description`, …) survive untouched.
+    """
+    sanitized = dict(tool)
+    func = sanitized.get("function")
+    if not isinstance(func, dict):
+        return sanitized
+    func = dict(func)
+    sanitized["function"] = func
+    params = func.get("parameters")
+    if not isinstance(params, dict):
+        return sanitized
+    params = dict(params)
+    func["parameters"] = params
+    for forbidden in _OPENAI_FORBIDDEN_TOP_LEVEL_SCHEMA_KEYS:
+        params.pop(forbidden, None)
+    return sanitized
 
 
 def _events_from_chunk(chunk: dict[str, Any]) -> list[ProviderEvent]:

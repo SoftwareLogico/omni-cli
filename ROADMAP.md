@@ -2,15 +2,15 @@
 
 ## Phase 0 - 4
 
-_Completed._ Local persistence, ephemeral Source of Truth (SoT), OpenAI-compatible adapters, text streaming, basic tool loop, standalone terminal-first assistant, and asynchronous Multi-Agent orchestration (JIT sub-agents).
+_Completed._ Local persistence, ephemeral Source of Truth (SoT), xAI-compatible adapters, text streaming, basic tool loop, standalone terminal-first assistant, and asynchronous Multi-Agent orchestration (JIT sub-agents).
 
-## Phase 5: Provider Expansion (OpenAI + Anthropic)
+## Phase 5: Provider Expansion (xAI + Anthropic)
 
-Objective: Add first-class support for `openai` and `anthropic` providers before moving into advanced browser automation capabilities.
+Objective: Add first-class support for `xAI` and `anthropic` providers before moving into advanced browser automation capabilities.
 
 ### Deliverables
 
-- Add and validate `openai` provider configuration and runtime adapter support.
+- Add and validate `xAI` provider configuration and runtime adapter support.
 - Add and validate `anthropic` provider configuration and runtime adapter support.
 - Ensure provider capability detection works consistently for both new providers.
 - Verify feature parity for streaming, tools, and SoT injection behavior.

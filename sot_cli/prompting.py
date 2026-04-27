@@ -35,6 +35,17 @@ def prepare_turn_request(
         session.max_output_tokens if session.max_output_tokens is not None else provider.max_output_tokens
     )
 
+    # Reasoning effort comes from the per-provider section in sot.toml. The
+    # config parser puts every unknown field under `provider.extra`, so this
+    # value is None unless the user explicitly sets `reasoning_effort = "..."`
+    # in `[providers.X]`. Stored verbatim — the provider adapter is the one
+    # that decides whether to relay it (and in which wire format) per
+    # provider name; non-supported providers ignore the field.
+    raw_effort = provider.extra.get("reasoning_effort")
+    reasoning_effort: str | None = (
+        str(raw_effort).strip() or None if raw_effort is not None else None
+    )
+
     system_prompt = build_system_prompt()
     orchestration_rules = build_orchestration_rules(is_sub_agent=disable_delegation)
 
@@ -51,4 +62,5 @@ def prepare_turn_request(
         max_output_tokens=max_output_tokens,
         enable_tools=enable_tools,
         disable_delegation=disable_delegation,
+        reasoning_effort=reasoning_effort,
     )

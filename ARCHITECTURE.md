@@ -21,7 +21,9 @@ The CLI is named after this exact rule: **SoT** (Source of Truth) is the archite
 
 ### `prompt` (main mode)
 
-Creates or resumes an interactive session in terminal. Detects model capabilities from the provider API and displays them in the startup banner. Creates a `SoTState` that lives in memory during the entire process, accumulating `chat_history` between turns.
+Creates or resumes an interactive session in terminal. Detects model capabilities from the provider API (or applies optimistic assumed defaults for `openai`/`xai`, see "Provider configuration" below) and displays them in the startup banner. Creates a `SoTState` that lives in memory during the entire process, accumulating `chat_history` between turns.
+
+The startup banner shows: provider, session id, route (base URL), model, start timestamp, capability flags, host environment (OS/arch/hostname/user/shell/cwd), and a magenta `tip:` line reminding the user that `sot.toml` and `sot.keys.toml` are the source of truth for provider settings (no need to re-run the wizard for tweaks).
 
 ### `command` (one-shot mode for multi-agent)
 
@@ -110,24 +112,86 @@ No parameters. Returns delegated tasks and status (RUNNING/COMPLETED). Prefer `w
 - Global CLI flag `--config <path>` can be passed before commands to use a specific TOML config.
 - Delegated agents inherit runtime context and session storage rules (including `SOT_SESSIONS_DIR` when set).
 - Boss/Worker prompt separation is enforced by the runtime (`AGENT_SYSTEM_PROMPT` vs `SUB_AGENT_SYSTEM_PROMPT`).
-All runtime tool settings live in `[tools]` inside `sot.toml`:
+  All runtime tool settings live in `[tools]` inside `sot.toml`. The values listed below are the **code defaults** applied when the field is absent; the bundled `sot.example.toml` ships with looser values intended as a comfortable starting point for real workloads.
 
-| Setting | Default | Description |
-|---------|---------|-------------|
-| `output_limit` | `12000` | Max characters of tool output before truncation. |
-| `default_command_timeout_seconds` | `180` | Default timeout (in seconds) applied to `run_command` foreground execution when the model does not pass an explicit `timeout_seconds`. The model is always free to override per call. |
-| `binary_check_size` | `8192` | Byte threshold for binary file detection in `read_files`. |
-| `show_thinking` | `true` | Stream the model's reasoning/thinking tokens to the terminal. Independent of `show_full`; gates reasoning output only. |
-| `show_full` | `true` | Stream tool-call argument chunks (and any other non-reasoning, non-text chunk the provider emits) in real time as the model generates them, verbatim. When disabled, tool calls are only shown as a single assembled line after streaming completes. Provider chunks are never mutated by the runtime; `show_full` only toggles whether they are rendered live. |
-| `max_rounds` | `25` | Max tool-call rounds the boss agent can execute per user prompt before the runtime stops it. |
-| `delegated_max_rounds` | `8` | Max tool-call rounds a sub-agent can execute before being stopped. |
-| `repeat_limit` | `3` | Max consecutive identical rounds (same tools, same arguments) the boss can repeat before the runtime aborts with a loop warning. |
-| `delegated_repeat_limit` | `2` | Same as above but for sub-agents. |
-| `search_default_head_limit` | `200` | Default max number of result entries returned by a single `search_code` call when the model does not pass an explicit `head_limit`. Pass `0` from the tool call to disable. |
-| `search_max_line_length` | `500` | Per-line truncation length (characters) applied to `search_code` output. Controls both the ripgrep `--max-columns` flag and the Python fallback slicing. |
-| `search_timeout_seconds` | `30` | Hard timeout (in seconds) for a single `search_code` invocation (ripgrep subprocess or Python fallback). Keeps pathological patterns from hanging a turn. |
-| `reasoning_char_budget` | `8000` | Hard cap on streamed reasoning/thinking characters per turn for the boss agent. When the cumulative reasoning channel exceeds this budget during a single stream, the runtime cuts the provider connection, prints a yellow `⚠  reasoning budget exceeded` warning, and lets the tool loop advance. Protects against models that get stuck in eternal "let me reconsider…" loops inside a single response. Set to `0` to disable the cap. |
-| `delegated_reasoning_char_budget` | `4000` | Same cap applied to sub-agent turns. Typically smaller than the boss budget because delegated workers are expected to execute narrow tasks and should not spend long reasoning windows before acting. Set to `0` to disable. |
+| Setting                           | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| --------------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `output_limit`                    | `12000` | Max characters of tool output before truncation. Acts as a per-tool firewall against a single noisy command (long log dumps, deep recursive listings, base64-encoded binaries) blowing up the context window. The model still sees a `[truncated]` marker, so it knows when to switch to file-based offloading (`run_command > tmpfile.txt; read_files tmpfile.txt`).                                                                                                                                            |
+| `default_command_timeout_seconds` | `180`   | Default wall-clock timeout (seconds) applied to `run_command` foreground execution when the model does not pass an explicit `timeout_seconds`. The model is always free to override per call. Increase only if your typical commands legitimately run longer than 3 minutes.                                                                                                                                                                                                                                     |
+| `binary_check_size`               | `8192`  | Byte threshold used by `read_files` to detect binary content. The reader inspects this many bytes at the start of the file and rejects non-UTF8 input above the threshold, preventing the SoT from being polluted with garbage bytes that would also balloon the context.                                                                                                                                                                                                                                        |
+| `show_thinking`                   | `true`  | Stream the model's reasoning/thinking tokens to the terminal as they arrive. Independent of `show_full`; gates **reasoning** output only. Set to `false` if the live reasoning trace is noisy — the model still reasons internally, you just don't see it scroll.                                                                                                                                                                                                                                                |
+| `show_full`                       | `true`  | Stream tool-call argument chunks (and any other non-reasoning, non-text chunk the provider emits) in real time as the model generates them, verbatim. When disabled, tool calls are only shown as a single assembled line after streaming completes. Provider chunks are never mutated by the runtime; `show_full` only toggles whether they are rendered live.                                                                                                                                                  |
+| `max_rounds`                      | `25`    | Max tool-call rounds the boss agent can execute per user prompt before the runtime stops it. The bundled example raises this to `250` for power users; raise/lower depending on how much trial-and-error you want to allow per turn.                                                                                                                                                                                                                                                                             |
+| `delegated_max_rounds`            | `8`     | Max tool-call rounds a sub-agent can execute before being stopped. The bundled example raises this to `80`.                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `repeat_limit`                    | `3`     | Max consecutive identical rounds (same tools, same arguments) the boss can repeat before the runtime aborts with a loop warning. Catches "stuck-in-a-loop" failure modes early.                                                                                                                                                                                                                                                                                                                                  |
+| `delegated_repeat_limit`          | `2`     | Same as above but for sub-agents. Tighter on purpose because workers are expected to converge faster on a narrower task.                                                                                                                                                                                                                                                                                                                                                                                         |
+| `search_default_head_limit`       | `200`   | Default max number of result entries returned by a single `search_code` call when the model does not pass an explicit `head_limit`. Pass `0` from the tool call to disable.                                                                                                                                                                                                                                                                                                                                      |
+| `search_max_line_length`          | `500`   | Per-line truncation length (characters) applied to `search_code` output. Controls both the ripgrep `--max-columns` flag and the Python fallback slicing. The bundled example sets `1000` so minified one-liners and long log lines aren't mangled.                                                                                                                                                                                                                                                               |
+| `search_timeout_seconds`          | `30`    | Hard timeout (seconds) for a single `search_code` invocation (ripgrep subprocess or Python fallback). Keeps pathological patterns from hanging a turn.                                                                                                                                                                                                                                                                                                                                                           |
+| `reasoning_char_budget`           | `8000`  | Hard cap on streamed reasoning/thinking characters per turn for the boss agent. When the cumulative reasoning channel exceeds this budget during a single stream, the runtime cuts the provider connection, prints a yellow `⚠  reasoning budget exceeded` warning, and lets the tool loop advance. Protects against models that get stuck in eternal "let me reconsider…" loops inside a single response. Set to `0` to disable the cap. The bundled example raises this to `10000` for reasoning-heavy models. |
+| `delegated_reasoning_char_budget` | `4000`  | Same cap applied to sub-agent turns. Typically smaller than the boss budget because delegated workers are expected to execute narrow tasks and should not spend long reasoning windows before acting. Set to `0` to disable. The bundled example raises this to `8000`.                                                                                                                                                                                                                                          |
+
+## Provider configuration (`[providers.X]`)
+
+`sot-cli` ships with a single OpenAI-compatible HTTP adapter (`sot_cli/providers/openai_compat.py`) that talks to every supported backend. Per-provider tweaks live under `[providers.<name>]` in `sot.toml`; per-provider API keys live under `[providers.<name>] api_key = "..."` in `sot.keys.toml` (separate file so `.gitignore` can keep secrets out of commits).
+
+Every provider section accepts the same five base fields:
+
+| Field               | Type            | Description                                                                                                                                                                                                                                              |
+| ------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `base_url`          | string          | Full URL of the OpenAI-compatible endpoint, including the `/v1` suffix.                                                                                                                                                                                  |
+| `model`             | string          | Model name. Required for cloud providers. For `lmstudio` and `ollama` it can be left empty (`""`) so the adapter auto-resolves the currently loaded model.                                                                                               |
+| `temperature`       | float           | Sent on every request (subject to per-provider quirks — see below).                                                                                                                                                                                      |
+| `max_output_tokens` | int             | Token cap on the completion. Wire-level field name diverges per provider; the adapter handles the rename.                                                                                                                                                |
+| `configured`        | bool (optional) | Marker written by the wizard. When `true`, the selector skips the per-provider mini-wizard and enters the session directly. Manual edits to provider settings do **not** require flipping this back to `false` — the runtime trusts whatever is on disk. |
+
+### Optional fields per provider
+
+| Field                       | Where it applies       | Effect                                                                                                                                                                                                                                                                             |
+| --------------------------- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `http_referer`, `app_title` | `openrouter`           | Forwarded as `HTTP-Referer` and `X-OpenRouter-Title` headers (used by OpenRouter for app attribution and rankings).                                                                                                                                                                |
+| `reasoning_effort`          | `openai`, `openrouter` | Hint for reasoning-class models. Accepted values: `"none"`, `"minimal"`, `"low"`, `"medium"`, `"high"`, `"xhigh"`. The adapter relays it in the right wire format per provider — see "OpenAI-specific wire-level adaptations" below. Silently ignored for any other provider name. |
+
+### Supported provider names
+
+`lmstudio`, `openrouter`, `openai`, `xai`, `ollama`, `nvidia`. New names can be added to `KNOWN_PROVIDERS` in `sot_cli/config/app.py`; the same OpenAI-compatible adapter handles them all.
+
+### OpenAI-specific wire-level adaptations
+
+OpenAI is the strictest of the supported APIs and rejects unknown or unsupported fields with `HTTP 400`. The adapter applies several **OpenAI-only** transformations to keep requests valid without disturbing other providers:
+
+1. **Reasoning model auto-detection.** Models whose name starts with `gpt-5*` or matches `o<digit>` (e.g. `o1`, `o3-mini`, `o4-mini-2025-04-16`) are detected as reasoning-class. The detector is a pure string match in `_is_openai_reasoning_model` — no network call, no extra config field.
+2. **`max_tokens` → `max_completion_tokens`.** OpenAI deprecated `max_tokens` chat-completions-wide, and reasoning models reject it outright (`HTTP 400 unsupported_parameter`). The adapter always uses `max_completion_tokens` for `provider_name="openai"`. Other providers keep the legacy `max_tokens` field, which is what most OpenAI-compatible servers (vLLM, llama.cpp, Ollama, LM Studio, NVIDIA NIM) actually understand.
+3. **`temperature` stripped for reasoning models.** Reasoning models reject any `temperature` value other than the baked-in default (`HTTP 400`). The adapter omits the field when the model is reasoning-class. Non-reasoning OpenAI models still get the `temperature` from the toml.
+4. **`reasoning_effort` per-model gate.** `reasoning_effort` is only sent for reasoning-class OpenAI models. If the user leaves the field set in `sot.toml` but switches to a non-reasoning model (e.g. `gpt-4o-mini`), the adapter silently drops it instead of letting the call 400. Wire format: flat top-level `"reasoning_effort": "<level>"` (Chat Completions style — the codebase intentionally does **not** use the Responses API, since Responses' server-side state would conflict with the locally-controlled SoT model).
+5. **Tool schema sanitization.** OpenAI's tool-call validator rejects schemas that use `oneOf`, `anyOf`, `allOf`, `not`, or `enum` at the **top level** of `function.parameters`. The adapter strips those keys from each tool schema before sending. Other providers keep the original schema. Constructs nested deeper inside individual property schemas are left alone.
+6. **Assumed capabilities.** OpenAI's `/v1/models` endpoint does not expose tools/modality flags or context windows in a useful shape, so the adapter assumes optimistic frontier defaults: `supports_tools=true`, `supports_images=true`, `supports_pdfs=true`, `context_length=400_000`. If the chosen model is more limited, the API surfaces that at request time. `xai` and other unknown OpenAI-compatible names get a minimal `supports_tools=true` only.
+
+### OpenRouter `reasoning_effort` wire format
+
+OpenRouter uses the unified nested object: `"reasoning": {"effort": "<level>"}`. The adapter encodes it accordingly when the user sets `reasoning_effort` in `[providers.openrouter]`. OpenRouter silently ignores it for non-reasoning upstream models, so it's safe to leave on by default.
+
+### Provider capability detection
+
+For providers that expose a queryable models endpoint, the adapter performs a one-shot capability detection at startup and populates the `ProviderCapability` dataclass (used to render the banner and gate tool/SoT features per session):
+
+- `lmstudio`: queries `/api/v1/models` (falls back to `/api/v0/models` and `/v1/models`) and reads context length, parameter count, quantization, and modality flags from LM Studio's native response.
+- `openrouter`: queries `/models` and reads `architecture.input_modalities` and `supported_parameters` to derive tool/vision/PDF/audio/video flags.
+- `ollama`: queries `/api/ps` to surface the running model's allocated context length, then `/api/show` for parameter count and quantization.
+- `nvidia`: queries `/models` for connectivity verification (the endpoint returns a flat list with no architecture metadata), and assumes tool support.
+- `openai`: skipped — uses the assumed defaults listed above.
+- `xai` and unknown names: skipped — minimal `supports_tools=true` default.
+
+### Wizard, `configured` marker, and manual edits
+
+The selector at startup (when no `--provider` flag and no resumed session) considers a provider "configured" iff its `[providers.X]` section in `sot.toml` contains `configured = true`. Single signal — no heuristics on URL or key value.
+
+- **First run** (no `sot.toml`): `_first_run_setup` copies the bundled examples, asks for credentials/URL/model for the chosen provider, and writes `configured = true` at the end.
+- **Re-run, picking an unconfigured provider**: a per-provider mini-wizard runs (`_configure_provider_credentials`) — same questions, then writes `configured = true`.
+- **Re-run, picking a configured provider**: enters the session directly with whatever the toml currently has.
+- **Manual edits**: encouraged. The startup banner renders a `tip:` line in magenta pointing the user to `sot.toml` / `sot.keys.toml`. To force the wizard for a given provider again, just delete its `configured = true` line.
+
+The wizard does not exist for `--provider X` overrides or session resumes (`sot-cli <session_id>`), since both paths assume the user already knows what they want.
 
 ## File Discovery Tool (`list_dir`)
 
@@ -311,4 +375,4 @@ Change runtime parameters for future turns in the current session: `title`, `pro
 2. `edit_file` makes a single exact-match replacement per call. `apply_text_edits` batches multiple edits (text matching or line ranges) atomically in one call. Neither is a regex engine nor an AST editor.
 3. `read_files` supports targeted line-range reads (per `files[]` entry) for any UTF-8 text file, but partial reads intentionally do not populate the SoT as full-file snapshots.
 4. `search_code` requires [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) to be installed and available in PATH.
-4. Archive files (`zip`, `tar`, `gz`, etc.) cannot be read directly. The model receives a format-specific error with the correct `run_command` invocation to list or extract contents.
+5. Archive files (`zip`, `tar`, `gz`, etc.) cannot be read directly. The model receives a format-specific error with the correct `run_command` invocation to list or extract contents.

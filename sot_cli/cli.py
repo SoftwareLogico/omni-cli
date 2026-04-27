@@ -335,6 +335,39 @@ def _read_toml_string(toml_path: Path, section_path: list[str], field: str, defa
     return str(value) if value is not None else default
 
 
+def _extract_section_header(line: str) -> str | None:
+    """Return the canonical `[section]` header for a TOML line, or None if the
+    line is not a section header.
+
+    Tolerates two real-world quirks our hand-edited toml files have:
+
+    1. Leading/trailing whitespace around the header.
+    2. **Inline comments after the closing `]`**, e.g.
+       ``[providers.openai] # works with OpenAI and any OpenAI-compatible API``.
+       The previous implementation matched section headers with
+       ``stripped.endswith("]")`` and silently dropped these on the floor —
+       which is why writes to fields inside such a section (notably the
+       ``configured = true`` marker) appeared to "do nothing".
+
+    Quoted keys with embedded ``]`` (e.g. ``[a."weird]name"]``) are not
+    handled; the wizard never writes such headers, so the simple "first ``]``
+    wins" rule is enough for our toml shape.
+    """
+    stripped = line.lstrip()
+    if not stripped.startswith("["):
+        return None
+    end = stripped.find("]")
+    if end == -1:
+        return None
+    header = stripped[: end + 1]
+    rest = stripped[end + 1 :].lstrip()
+    # After the closing `]` only whitespace or a `#` comment may appear; if
+    # something else is there (`[foo]bar = 1`), it's not a real header line.
+    if rest and not rest.startswith("#"):
+        return None
+    return header
+
+
 def _update_toml_string_field(toml_path: Path, section_header: str, field: str, new_value: str) -> bool:
     """Surgical text-based update of a string field in a TOML section.
 
@@ -350,9 +383,9 @@ def _update_toml_string_field(toml_path: Path, section_header: str, field: str, 
     in_target = False
     pattern = re.compile(rf'^(\s*){re.escape(field)}\s*=\s*"[^"]*"(.*)$')
     for i, line in enumerate(lines):
-        stripped = line.strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
-            in_target = stripped == section_header
+        header = _extract_section_header(line)
+        if header is not None:
+            in_target = header == section_header
             continue
         if in_target:
             match = pattern.match(line)
@@ -382,7 +415,11 @@ def _select_provider_interactive(providers: list[str], current_default: str | No
     console.print("\n[bold]Select a provider:[/bold]")
     for i, name in enumerate(providers, 1):
         marker = "  [yellow](default)[/yellow]" if name == current_default else ""
-        console.print(f"  {i}. {name}{marker}")
+        # Hint shown next to provider names whose adapter doubles as a generic
+        # transport (currently only "openai", which speaks to both the real
+        # OpenAI API and any OpenAI-compatible service).
+        hint = "  [dim](or any OpenAI-compatible API)[/dim]" if name == "openai" else ""
+        console.print(f"  {i}. {name}{hint}{marker}")
 
     while True:
         prompt_suffix = f" [Enter for {current_default}]" if current_default in providers else ""
@@ -422,15 +459,15 @@ def _first_run_setup() -> str:
     # 1. Welcome — big SOT-CLI, thanks, manifesto-ish brief, and a "let's connect" line.
     sot_logo = (
         "[bold cyan]"
-        " ▄▄▄▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄▄▄▄          ▄▄▄▄▄▄▄▄▄▄▄  ▄            ▄▄▄▄▄▄▄▄▄▄▄ \n"
-        "▐░░░░░░░░░░░▌▐░░░░░░░░░░░▌▐░░░░░░░░░░░▌        ▐░░░░░░░░░░░▌▐░▌          ▐░░░░░░░░░░░▌\n"
-        "▐░█▀▀▀▀▀▀▀▀▀ ▐░█▀▀▀▀▀▀▀█░▌ ▀▀▀▀█░█▀▀▀▀         ▐░█▀▀▀▀▀▀▀▀▀ ▐░▌           ▀▀▀▀█░█▀▀▀▀ \n"
-        "▐░█▄▄▄▄▄▄▄▄▄ ▐░▌       ▐░▌     ▐░▌   ▄▄▄▄▄▄▄▄▄ ▐░▌          ▐░▌               ▐░▌     \n"
-        "▐░░░░░░░░░░░▌▐░▌       ▐░▌     ▐░▌  ▐░░░░░░░░░▌▐░▌          ▐░▌               ▐░▌     \n"
-        " ▀▀▀▀▀▀▀▀▀█░▌▐░▌       ▐░▌     ▐░▌   ▀▀▀▀▀▀▀▀▀ ▐░▌          ▐░▌               ▐░▌     \n"
-        " ▄▄▄▄▄▄▄▄▄█░▌▐░█▄▄▄▄▄▄▄█░▌     ▐░▌             ▐░█▄▄▄▄▄▄▄▄▄ ▐░█▄▄▄▄▄▄▄▄▄  ▄▄▄▄█░█▄▄▄▄ \n"
-        "▐░░░░░░░░░░░▌▐░░░░░░░░░░░▌     ▐░▌             ▐░░░░░░░░░░░▌▐░░░░░░░░░░░▌▐░░░░░░░░░░░▌\n"
-        " ▀▀▀▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀▀▀▀       ▀               ▀▀▀▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀▀▀▀ "
+        " ▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄      ▄▄▄▄▄▄▄  ▄        ▄▄▄▄▄▄▄ \n"
+        "▐░░░░░░░▌▐░░░░░░░▌▐░░░░░░░▌    ▐░░░░░░░▌▐░▌      ▐░░░░░░░▌\n"
+        "▐░█▀▀▀▀▀ ▐░█▀▀▀█░▌ ▀▀█░█▀▀     ▐░█▀▀▀▀▀ ▐░▌       ▀▀█░█▀▀ \n"
+        "▐░█▄▄▄▄▄ ▐░▌   ▐░▌   ▐░▌ ▄▄▄▄▄ ▐░▌      ▐░▌         ▐░▌   \n"
+        "▐░░░░░░░▌▐░▌   ▐░▌   ▐░▌▐░░░░░▌▐░▌      ▐░▌         ▐░▌   \n"
+        " ▀▀▀▀▀█░▌▐░▌   ▐░▌   ▐░▌ ▀▀▀▀▀ ▐░▌      ▐░▌         ▐░▌   \n"
+        " ▄▄▄▄▄█░▌▐░█▄▄▄█░▌   ▐░▌       ▐░█▄▄▄▄▄ ▐░█▄▄▄▄▄  ▄▄█░█▄▄ \n"
+        "▐░░░░░░░▌▐░░░░░░░▌   ▐░▌       ▐░░░░░░░▌▐░░░░░░░▌▐░░░░░░░▌\n"
+        " ▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀     ▀         ▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀ \n"
         "[/bold cyan]"
     )
     console.print()
@@ -482,9 +519,13 @@ def _first_run_setup() -> str:
     providers = _read_provider_names_from_toml(source_toml)
     selected = _select_provider_interactive(providers)
     is_local = selected in {"lmstudio", "ollama"}
+    key_optional = selected in _OPTIONAL_KEY_PROVIDERS
 
-    # 4. API key — required for remote, optional for local.
-    if is_local:
+    # 4. API key — required for remote providers that need auth, optional for
+    # everything in `_OPTIONAL_KEY_PROVIDERS` (local servers and openai, since
+    # the openai adapter is also used to reach OpenAI-compatible APIs that may
+    # not require a key).
+    if key_optional:
         key_input = _ask(
             f"\nAPI key for {selected} (optional, press Enter to leave empty): "
         ).strip()
@@ -495,14 +536,24 @@ def _first_run_setup() -> str:
                 break
             console.print(f"[red]An API key is required for {selected}.[/red]")
 
-    # 5. Base URL — only prompted for local providers. We avoid asking for
-    # the full URL (error-prone) and instead break it into host (localhost
-    # vs. custom IP/hostname) and port (with a per-provider default), then
-    # build http://{host}:{port}/v1 ourselves. Stored in memory only; the
-    # toml is updated below once we know the user finished the wizard.
+    # 5. Base URL — local providers go through the host/port helper, openai
+    # has its own simple "default-or-custom" prompt (since the OpenAI-style
+    # base URL is a full URL, not host+port). Other remote providers keep
+    # the URL hard-coded in the example toml and do not ask. Stored in
+    # memory only; the toml is updated below once the wizard finishes.
     new_url: str | None = None
     if is_local:
         new_url = _ask_local_url(selected)
+    elif selected == "openai":
+        new_url = _ask_openai_url()
+
+    # 5b. Model — only for providers that expose a meaningful model field in
+    # the toml. The default shown comes from whatever the source toml already
+    # has (the bundled example on first run). Optional: Enter keeps it as-is.
+    new_model: str | None = None
+    if selected in _MODEL_CONFIGURABLE_PROVIDERS:
+        current_model = _read_toml_string(source_toml, ["providers", selected], "model")
+        new_model = _ask_model(selected, current_model)
 
     # 6. Commit phase — the user has answered everything, only now do we
     # touch the filesystem. Copy templates first, then apply the field
@@ -524,15 +575,20 @@ def _first_run_setup() -> str:
         current_url = _read_toml_string(sot_toml, ["providers", selected], "base_url")
         if new_url != current_url:
             _update_toml_string_field(sot_toml, f"[providers.{selected}]", "base_url", new_url)
+    if new_model:
+        current_model_in_toml = _read_toml_string(sot_toml, ["providers", selected], "model")
+        if new_model != current_model_in_toml:
+            _update_toml_string_field(sot_toml, f"[providers.{selected}]", "model", new_model)
     _update_toml_string_field(sot_toml, "[runtime]", "primary_provider", selected)
     # Mark this provider as configured so future selector picks of the same
     # provider don't re-trigger the per-provider config flow. Other providers
     # in the toml stay unmarked and will be configured on demand.
-    _set_toml_string_field(sot_toml, f"[providers.{selected}]", "wizard_configured", "yes")
+    _set_toml_bool_field(sot_toml, f"[providers.{selected}]", "configured", True)
 
     # 7. Final summary + pointers — show the user what will be wired up before
     # they enter the session, then point to the files they can tweak later.
     final_url = _read_toml_string(sot_toml, ["providers", selected], "base_url")
+    final_model = _read_toml_string(sot_toml, ["providers", selected], "model")
     console.print("\n[bold green]Setup complete.[/bold green]\n")
     console.print(
         f"  [bold]provider[/bold]  [bold yellow]{selected.upper()}[/bold yellow]"
@@ -540,6 +596,10 @@ def _first_run_setup() -> str:
     console.print(
         f"  [bold]route[/bold]     [yellow]{final_url}[/yellow]"
     )
+    if final_model:
+        console.print(
+            f"  [bold]model[/bold]     [yellow]{final_model}[/yellow]"
+        )
     console.print()
     console.print(
         "To change models or base URLs, edit [bold yellow]sot.toml[/bold yellow]."
@@ -559,6 +619,72 @@ _LOCAL_DEFAULT_PORTS: dict[str, str] = {
     "lmstudio": "1234",
     "ollama": "11434",
 }
+
+# Providers where the API key is optional during the wizard. `openai` is
+# included because the same adapter is used to talk to any OpenAI-compatible
+# API, and many of those (local OpenAI-like servers, internal gateways) do
+# not require a key.
+_OPTIONAL_KEY_PROVIDERS: set[str] = {"lmstudio", "ollama", "openai"}
+
+# Providers that expose a "model = ..." field worth asking the user about
+# during the wizard. Local servers (lmstudio, ollama) auto-resolve whatever
+# model is currently loaded, so we leave them out — asking would just
+# duplicate that selection. The wizard keeps the prompt optional and pre-fills
+# whatever default the bundled example/sot.toml currently has.
+_MODEL_CONFIGURABLE_PROVIDERS: set[str] = {"openrouter", "nvidia", "openai"}
+
+# Canonical default base URL for the openai provider. Used by the wizard
+# (as the suggested default the user can keep with Enter) and by the
+# "is this provider configured?" heuristic below.
+_OPENAI_DEFAULT_URL = "https://api.openai.com/v1"
+
+
+def _ask_model(provider: str, current_default: str) -> str:
+    """Ask the user for a model name, optional, with the current default shown.
+
+    Used by the wizard for providers in `_MODEL_CONFIGURABLE_PROVIDERS`. The
+    `current_default` argument is whatever the on-disk toml (example template
+    on first run, real `sot.toml` on later runs) currently holds. Pressing
+    Enter keeps that default; typing a new value overrides it. We do not
+    validate the model name — provider APIs reject unknown ones at the first
+    request, which is the right place to surface that error.
+    """
+    console.print(f"\n[bold]Model for {provider}[/bold]")
+    if current_default:
+        console.print(f"  default: [yellow]{current_default}[/yellow]")
+        entered = _ask(
+            "Press Enter to keep the default, or type a model name: "
+        ).strip()
+        return entered if entered else current_default
+    return _ask("Type a model name: ").strip()
+
+
+def _ask_openai_url() -> str:
+    """Ask for the base URL of the openai (or OpenAI-compatible) provider.
+
+    Mirrors the UX of `_ask_local_url` but skips the host/port helpers because
+    the canonical OpenAI endpoint is a full URL. The user presses Enter to keep
+    the default, or pastes a custom URL (e.g. an internal gateway or any other
+    OpenAI-compatible service). Trailing slashes are stripped and the ``/v1``
+    suffix is appended automatically when missing.
+    """
+    console.print(
+        "\n[bold]Base URL for openai (or any OpenAI-compatible API)[/bold]"
+    )
+    console.print(f"  default: [yellow]{_OPENAI_DEFAULT_URL}[/yellow]")
+    while True:
+        entered = _ask(
+            "Press Enter to keep the default, or paste a custom URL: "
+        ).strip()
+        if not entered:
+            return _OPENAI_DEFAULT_URL
+        if not (entered.startswith("http://") or entered.startswith("https://")):
+            console.print("[red]URL must start with http:// or https://.[/red]")
+            continue
+        url = entered.rstrip("/")
+        if not url.endswith("/v1"):
+            url = f"{url}/v1"
+        return url
 
 
 def _ask_local_url(provider: str) -> str:
@@ -627,18 +753,7 @@ def _ask_local_port(provider: str) -> str:
         console.print(f"[red]Invalid port: {port_input!r}[/red]")
 
 
-# ── Per-provider re-config (selector path) ──────────────────────────────
-
-
-# Bundled defaults for local providers. Used as a fallback heuristic to
-# decide whether a provider has been customized — if the base_url still
-# matches one of these we assume the user never touched it. Stored here
-# (rather than re-read from the example toml every time) so the check is
-# cheap and works even after the example file has been moved.
-_LOCAL_DEFAULT_URLS: dict[str, str] = {
-    "lmstudio": "http://localhost:1234/v1",
-    "ollama": "http://localhost:11434/v1",
-}
+# ── TOML field insertion helper ─────────────────────────────────────────
 
 
 def _set_toml_string_field(
@@ -648,8 +763,8 @@ def _set_toml_string_field(
     the target section. Differs from `_update_toml_string_field` only in the
     insert behavior — the line-rewriting path is identical and reused below.
 
-    Used to write the `wizard_configured = "yes"` marker that is absent from
-    the bundled example templates.
+    Used for any string-valued field that may be missing from the bundled
+    example templates and needs to be inserted on demand.
     """
     if _update_toml_string_field(toml_path, section_header, field, new_value):
         return True
@@ -661,7 +776,7 @@ def _set_toml_string_field(
     lines = text.split("\n")
     section_idx: int | None = None
     for i, line in enumerate(lines):
-        if line.strip() == section_header:
+        if _extract_section_header(line) == section_header:
             section_idx = i
             break
     if section_idx is None:
@@ -672,8 +787,7 @@ def _set_toml_string_field(
     # populated line of this section.
     insert_at = len(lines)
     for j in range(section_idx + 1, len(lines)):
-        stripped = lines[j].strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
+        if _extract_section_header(lines[j]) is not None:
             insert_at = j
             break
     while insert_at > section_idx + 1 and not lines[insert_at - 1].strip():
@@ -684,49 +798,116 @@ def _set_toml_string_field(
     return True
 
 
-def _is_provider_configured(
-    provider: str, sot_toml: Path, sot_keys_toml: Path
+def _set_toml_bool_field(
+    toml_path: Path, section_header: str, field: str, value: bool
 ) -> bool:
-    """Heuristic: did the user (via wizard or manual edit) configure this provider?
+    """Set or insert ``field = true|false`` (boolean literal, no quotes) inside
+    ``section_header``. Idempotent.
 
-    Three signals, in order:
+    If the field already exists as a boolean inside the target section, the line
+    is rewritten in place (preserving indent and any trailing comment).
+    Otherwise the field is inserted at the end of the section. Comments and
+    whitespace elsewhere in the file are preserved.
 
-    1. Explicit `wizard_configured = "yes"` marker in `[providers.X]` — set
-       by the wizard / per-provider re-config flow. Trumps everything else.
-    2. For local providers, base_url customized away from the bundled
-       localhost default → considered configured (covers users who edited
-       sot.toml by hand).
-    3. For remote providers, an api_key that is non-empty and not the
-       template placeholder (which contains ``"..."``).
+    Used to write the ``configured = true`` marker the runtime checks to decide
+    whether to skip the per-provider mini-wizard.
     """
-    if _read_toml_string(sot_toml, ["providers", provider], "wizard_configured") == "yes":
-        return True
-
-    is_local = provider in {"lmstudio", "ollama"}
-    if is_local:
-        base_url = _read_toml_string(sot_toml, ["providers", provider], "base_url")
-        return bool(base_url) and base_url != _LOCAL_DEFAULT_URLS.get(provider, "")
-
-    api_key = _read_toml_string(sot_keys_toml, ["providers", provider], "api_key")
-    if not api_key:
+    try:
+        text = toml_path.read_text(encoding="utf-8")
+    except OSError:
         return False
-    if "..." in api_key:
+    lines = text.split("\n")
+    literal = "true" if value else "false"
+
+    # Pass 1 — rewrite in place when the field already exists as a boolean.
+    in_target = False
+    pattern = re.compile(rf'^(\s*){re.escape(field)}\s*=\s*(?:true|false)(.*)$')
+    for i, line in enumerate(lines):
+        header = _extract_section_header(line)
+        if header is not None:
+            in_target = header == section_header
+            continue
+        if in_target:
+            match = pattern.match(line)
+            if match:
+                indent, trailing = match.group(1), match.group(2)
+                lines[i] = f"{indent}{field} = {literal}{trailing}"
+                toml_path.write_text("\n".join(lines), encoding="utf-8")
+                return True
+
+    # Pass 2 — section exists but field is missing: insert before the next
+    # section header, after the last populated line of this one.
+    section_idx: int | None = None
+    for i, line in enumerate(lines):
+        if _extract_section_header(line) == section_header:
+            section_idx = i
+            break
+    if section_idx is None:
         return False
+
+    insert_at = len(lines)
+    for j in range(section_idx + 1, len(lines)):
+        if _extract_section_header(lines[j]) is not None:
+            insert_at = j
+            break
+    while insert_at > section_idx + 1 and not lines[insert_at - 1].strip():
+        insert_at -= 1
+
+    lines.insert(insert_at, f"{field} = {literal}")
+    toml_path.write_text("\n".join(lines), encoding="utf-8")
     return True
+
+
+def _read_toml_bool(
+    toml_path: Path, section_path: list[str], field: str, default: bool = False
+) -> bool:
+    """Read a boolean field from a nested TOML section. Returns ``default`` on
+    any error (file missing, parse failure, missing section, wrong type)."""
+    try:
+        with toml_path.open("rb") as handle:
+            data: Any = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError):
+        return default
+    cur: Any = data
+    for key in section_path:
+        if not isinstance(cur, dict):
+            return default
+        cur = cur.get(key, {})
+    if not isinstance(cur, dict):
+        return default
+    value = cur.get(field, default)
+    return bool(value) if isinstance(value, bool) else default
+
+
+# ── Per-provider re-config (selector path) ──────────────────────────────
+
+
+def _is_provider_configured(provider: str, sot_toml: Path) -> bool:
+    """Single-signal check: was this provider marked as configured?
+
+    Returns True iff the provider's ``[providers.X]`` section in ``sot.toml``
+    contains ``configured = true``. The marker is written by
+    ``_first_run_setup`` and ``_configure_provider_credentials`` after the user
+    successfully completes the wizard for that provider. Anything else
+    (missing field, ``configured = false``, manual edits to base_url/api_key)
+    is treated as "not configured" and triggers the mini-wizard the next time
+    the user picks the provider in the selector.
+    """
+    return _read_toml_bool(sot_toml, ["providers", provider], "configured", default=False)
 
 
 def _configure_provider_credentials(
     provider: str, sot_toml: Path, sot_keys_toml: Path
 ) -> None:
-    """Run the per-provider key + base_url flow outside of first-run.
+    """Run the per-provider key + base_url flow when the user picks an
+    unconfigured provider from the selector.
 
-    Called when the user picks an unconfigured provider from the selector.
-    Mirrors steps 4–5 of `_first_run_setup` but writes to disk immediately —
-    the toml files already exist at this point so deferring is unnecessary.
-    Marks the provider as configured at the end so we don't re-prompt on
-    subsequent launches.
+    Mirrors steps 4–5 of ``_first_run_setup`` but writes to disk immediately,
+    since the toml files already exist at this point. Marks the provider as
+    configured at the end so subsequent launches go straight into the session.
     """
     is_local = provider in {"lmstudio", "ollama"}
+    key_optional = provider in _OPTIONAL_KEY_PROVIDERS
 
     console.print()
     console.print(
@@ -734,7 +915,7 @@ def _configure_provider_credentials(
         f"let's set it up.[/bold yellow]"
     )
 
-    if is_local:
+    if key_optional:
         key_input = _ask(
             f"\nAPI key for {provider} (optional, press Enter to leave empty): "
         ).strip()
@@ -752,13 +933,27 @@ def _configure_provider_credentials(
         current_url = _read_toml_string(sot_toml, ["providers", provider], "base_url")
         if new_url != current_url:
             _update_toml_string_field(sot_toml, f"[providers.{provider}]", "base_url", new_url)
+    elif provider == "openai":
+        new_url = _ask_openai_url()
+        current_url = _read_toml_string(sot_toml, ["providers", provider], "base_url")
+        if new_url != current_url:
+            _update_toml_string_field(sot_toml, f"[providers.{provider}]", "base_url", new_url)
 
-    _set_toml_string_field(sot_toml, f"[providers.{provider}]", "wizard_configured", "yes")
+    if provider in _MODEL_CONFIGURABLE_PROVIDERS:
+        current_model = _read_toml_string(sot_toml, ["providers", provider], "model")
+        new_model = _ask_model(provider, current_model)
+        if new_model and new_model != current_model:
+            _update_toml_string_field(sot_toml, f"[providers.{provider}]", "model", new_model)
+
+    _set_toml_bool_field(sot_toml, f"[providers.{provider}]", "configured", True)
 
     final_url = _read_toml_string(sot_toml, ["providers", provider], "base_url")
+    final_model = _read_toml_string(sot_toml, ["providers", provider], "model")
     console.print(f"\n[bold green]{provider.upper()} configured.[/bold green]\n")
     console.print(f"  [bold]provider[/bold]  [bold yellow]{provider.upper()}[/bold yellow]")
     console.print(f"  [bold]route[/bold]     [yellow]{final_url}[/yellow]")
+    if final_model:
+        console.print(f"  [bold]model[/bold]     [yellow]{final_model}[/yellow]")
     console.print()
 
 
@@ -792,9 +987,10 @@ def _dispatch(args: Namespace) -> int:
     # Provider selector for fresh interactive sessions when --provider was not
     # passed and we're not resuming an existing session by ID. We honor the
     # toml's primary_provider as the highlighted default. If the user picks a
-    # provider that has never been configured (placeholder API key, or local
-    # base_url still pointing at the bundled localhost default), we drop into
-    # the per-provider mini-wizard before bringing up the session.
+    # provider that has not been marked as configured (no `configured = true`
+    # in its `[providers.X]` section) we drop into the per-provider
+    # mini-wizard before bringing up the session, so the first interaction
+    # with that provider always collects the credentials it needs.
     if (
         args.command in {None, "prompt", "chat"}
         and not getattr(args, "provider", None)
@@ -811,7 +1007,7 @@ def _dispatch(args: Namespace) -> int:
 
             sot_toml = runtime.paths.config_file
             sot_keys_toml = sot_toml.with_name("sot.keys.toml")
-            if not _is_provider_configured(chosen, sot_toml, sot_keys_toml):
+            if not _is_provider_configured(chosen, sot_toml):
                 _configure_provider_credentials(chosen, sot_toml, sot_keys_toml)
                 # The toml on disk just changed; rebuild runtime so the
                 # in-memory ProviderConfig (api_key, base_url, …) reflects
@@ -1244,15 +1440,15 @@ async def _run_prompt(
     # ── Build the startup banner ──
     logo = (
         "[bold cyan]"
-        " ▄▄▄▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄▄▄▄          ▄▄▄▄▄▄▄▄▄▄▄  ▄            ▄▄▄▄▄▄▄▄▄▄▄ \n"
-        "▐░░░░░░░░░░░▌▐░░░░░░░░░░░▌▐░░░░░░░░░░░▌        ▐░░░░░░░░░░░▌▐░▌          ▐░░░░░░░░░░░▌\n"
-        "▐░█▀▀▀▀▀▀▀▀▀ ▐░█▀▀▀▀▀▀▀█░▌ ▀▀▀▀█░█▀▀▀▀         ▐░█▀▀▀▀▀▀▀▀▀ ▐░▌           ▀▀▀▀█░█▀▀▀▀ \n"
-        "▐░█▄▄▄▄▄▄▄▄▄ ▐░▌       ▐░▌     ▐░▌.  ▄▄▄▄▄▄▄▄▄ ▐░▌          ▐░▌               ▐░▌     \n"
-        "▐░░░░░░░░░░░▌▐░▌       ▐░▌     ▐░▌. ▐░░░░░░░░░▌▐░▌          ▐░▌               ▐░▌     \n"
-        " ▀▀▀▀▀▀▀▀▀█░▌▐░▌       ▐░▌     ▐░▌.  ▀▀▀▀▀▀▀▀▀ ▐░▌          ▐░▌               ▐░▌     \n"
-        " ▄▄▄▄▄▄▄▄▄█░▌▐░█▄▄▄▄▄▄▄█░▌     ▐░▌             ▐░█▄▄▄▄▄▄▄▄▄ ▐░█▄▄▄▄▄▄▄▄▄  ▄▄▄▄█░█▄▄▄▄ \n"
-        "▐░░░░░░░░░░░▌▐░░░░░░░░░░░▌     ▐░▌             ▐░░░░░░░░░░░▌▐░░░░░░░░░░░▌▐░░░░░░░░░░░▌\n"
-        " ▀▀▀▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀▀▀▀       ▀               ▀▀▀▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀▀▀▀▀ \n"
+        " ▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄      ▄▄▄▄▄▄▄  ▄        ▄▄▄▄▄▄▄ \n"
+        "▐░░░░░░░▌▐░░░░░░░▌▐░░░░░░░▌    ▐░░░░░░░▌▐░▌      ▐░░░░░░░▌\n"
+        "▐░█▀▀▀▀▀ ▐░█▀▀▀█░▌ ▀▀█░█▀▀     ▐░█▀▀▀▀▀ ▐░▌       ▀▀█░█▀▀ \n"
+        "▐░█▄▄▄▄▄ ▐░▌   ▐░▌   ▐░▌ ▄▄▄▄▄ ▐░▌      ▐░▌         ▐░▌   \n"
+        "▐░░░░░░░▌▐░▌   ▐░▌   ▐░▌▐░░░░░▌▐░▌      ▐░▌         ▐░▌   \n"
+        " ▀▀▀▀▀█░▌▐░▌   ▐░▌   ▐░▌ ▀▀▀▀▀ ▐░▌      ▐░▌         ▐░▌   \n"
+        " ▄▄▄▄▄█░▌▐░█▄▄▄█░▌   ▐░▌       ▐░█▄▄▄▄▄ ▐░█▄▄▄▄▄  ▄▄█░█▄▄ \n"
+        "▐░░░░░░░▌▐░░░░░░░▌   ▐░▌       ▐░░░░░░░▌▐░░░░░░░▌▐░░░░░░░▌\n"
+        " ▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀     ▀         ▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀  ▀▀▀▀▀▀▀ \n"
         "[/bold cyan]"
     )
 
@@ -1302,7 +1498,12 @@ async def _run_prompt(
         if line or line == "":
             banner_lines.append(line)
     banner_lines.append("")
-    banner_lines.append(f"[yellow]{_submit_shortcut_help_text()} Press Ctrl+C on an empty prompt to leave.[/yellow]")
+    banner_lines.append(
+        "[yellow]tip: edit [bold]sot.toml[/bold] (base URLs, models, runtime options) and "
+        "[bold]sot.keys.toml[/bold] (API keys) to change provider settings.[/yellow]"
+    )
+    banner_lines.append("")
+    banner_lines.append(f"[bold yellow]{_submit_shortcut_help_text()} Press Ctrl+C on an empty prompt to leave.[/bold yellow]")
 
     console.print(
         Panel.fit(

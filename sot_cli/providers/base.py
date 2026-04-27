@@ -40,6 +40,13 @@ class ProviderRequest:
     disable_delegation: bool = False
     tools: list[dict[str, Any]] = field(default_factory=list)
     conversation_messages: list[dict[str, Any]] = field(default_factory=list)
+    # Reasoning effort hint relayed to the provider when supported. Only
+    # consumed by `openai` (flat `reasoning_effort` field on Chat Completions)
+    # and `openrouter` (nested `reasoning.effort` object). Ignored for every
+    # other provider to avoid sending unknown keys to OpenAI-compatible
+    # servers that reject unknown parameters with a 400. Empty / None means
+    # "do not send the parameter, let the provider use its own default".
+    reasoning_effort: str | None = None
 
 
 @dataclass

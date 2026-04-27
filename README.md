@@ -1,11 +1,11 @@
 # sot-cli 🚀 Limitless Local AI Agent
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Providers](https://img.shields.io/badge/Providers-OpenRouter%20%7C%20LMStudio%20%7C%20Ollama%20%7C%20NVIDIA-brightgreen.svg)](ARCHITECTURE.md)
+[![Providers](https://img.shields.io/badge/Providers-OpenRouter%20%7C%20LMStudio%20%7C%20OpenAI%20%7C%20Ollama%20%7C%20NVIDIA-brightgreen.svg)](ARCHITECTURE.md)
 [![Stars](https://img.shields.io/github/stars/softwarelogico/sot-cli?style=social)](https://github.com/softwarelogico/sot-cli)
 [![License](https://img.shields.io/github/license/SoftwareLogico/sot-cli?style=flat&logo=mit)](LICENSE)
 
-## ▶️ Watch it Work
+## ▶️ Watch it Work (Video)
 
 <p align="center">
     <a href="https://youtu.be/9h20O_aH6vs" title="sot-cli in action: True AI OS Control (Zero Guardrails)">
@@ -28,12 +28,16 @@ The name `sot-cli` is a direct nod to the architectural pattern it is built arou
 - **🤖 Async Multi-Agent**: Delegate trial-and-error to cheap sub-agents (empty ctx).
 - **⚡ Batch Orchestration**: Multi-tools + bash/Python scripts in ONE turn.
 - **🔧 Full Tools**: 21+ incl. unrestricted shell, regex code search, precise edits, MCP extensible.
-- **🌐 Multi-Provider**: Switch Ollama/LMStudio/OpenRouter/NVIDIA live.
+- **🌐 Multi-Provider**: Switch OpenRouter/LMStudio/OpenAI/Ollama/NVIDIA live.
 - **💰 Native Prompt Caching**: Payload architecture designed for prefix-matching, saving up to 50% API costs on long histories by caching static dialogue and keeping dynamic files at the bottom.
 
 👉 [SoT](SoT_Method.md) | [Tools](ARCHITECTURE.md) | [Roadmap](ROADMAP.md)
 
-## 🚀 How to Run
+## Platform Compatibility
+
+- ✅ **macOS**: Fully tested and compatible.
+- ✅ **Windows**: Fully tested and compatible.
+- ✅ **Linux**: Fully tested and compatible.
 
 ### Clone the repo
 
@@ -42,11 +46,13 @@ git clone https://github.com/SoftwareLogico/sot-cli.git
 cd sot-cli
 ```
 
-### (Optional but recommended) Create and activate a virtual environment
+## 🚀 How to Run
+
+### Create and activate a virtual environment (Optional but recommended)
 
 ```bash
 #uv
-uv venv sot --python 3.10
+uv venv <env_name> --python 3.10
 source <env_name>/bin/activate
 uv pip install -e .
 uv run sot-cli
@@ -80,17 +86,27 @@ Follow the steps the first time, have Fun!!
 
 ## 🛠 Manual Installation
 
-If you would rather wire things up by hand instead of going through the first-run wizard, you can prepare the config files yourself. After cloning and installing dependencies (see [How to Run](#-how-to-run)), follow the steps below.
+If you would rather wire things up by hand instead of going through the first-run wizard,
+After cloning and installing dependencies (see [How to Run](#-how-to-run)), follow the steps below.
 
 ### Rename TOML files
 
-```bash
-# Copy the public configuration file
-cp sot.example.toml sot.toml
+- 🟨 `sot.example.toml` => 🟩 `sot.toml`
+- 🟨 `sot.keys.example.toml` => 🟩 `sot.keys.toml`
 
-# Copy the private keys file (this file is in .gitignore so your secrets never leak)
-cp sot.keys.example.toml sot.keys.toml
-```
+These files are already in `.gitignore`, so your secrets will never be committed.
+
+### API Compatibility
+
+sot-cli is compatible with any OpenAI‑compatible (OpenAI‑like) API. The following providers have been tested and verified:
+
+- ✅ OpenRouter
+- ✅ LM Studio (local)
+- ✅ OpenAI (and any OpenAI-compatible API behind the same `openai` provider name)
+- ✅ Ollama (local)
+- ✅ NVIDIA
+
+We will continue adding and testing more providers — contributions welcome.
 
 ### Add API keys
 
@@ -103,6 +119,10 @@ api_key = "sk-or-v1-your-key-here"
 [providers.lmstudio]
 # Usually doesn't need an API key for local models
 api_key = ""
+
+[providers.openai]
+# Optional — leave empty for OpenAI-compatible local servers that don't require a key.
+api_key = "sk-..."
 
 [providers.ollama]
 # Usually doesn't need an API key for local models
@@ -122,12 +142,20 @@ base_url = "https://openrouter.ai/api/v1"
 model = "x-ai/grok-4.1-fast"
 temperature = 0.7
 max_output_tokens = 8192
+reasoning_effort = "medium" # silently ignored on non-reasoning upstreams
 
 [providers.lmstudio]
 base_url = "http://localhost:1234/v1"
 model = "model_name" # or "" to let the adapter auto-resolve
 temperature = 0.5
 max_output_tokens = 8192
+
+[providers.openai] # works with OpenAI and any OpenAI-compatible API
+base_url = "https://api.openai.com/v1"
+model = "gpt-5-nano-2025-08-07" # required — set to your served model name
+temperature = 0.2
+max_output_tokens = 8192
+reasoning_effort = "medium" # only valid for reasoning models (gpt-5/o-series); options: "none" | "minimal" | "low" | "medium" | "high" | "xhigh". Comment out or remove for plain gpt-4* models.
 
 [providers.ollama]
 base_url = "http://localhost:11434/v1"
@@ -142,6 +170,8 @@ temperature = 1
 max_output_tokens = 8192
 ```
 
+For full per-provider field semantics (including the `reasoning_effort` wire format differences and OpenAI-specific quirks like `max_completion_tokens` and tool schema sanitization), see [ARCHITECTURE.md → Provider configuration](ARCHITECTURE.md#provider-configuration-providersx).
+
 ### Run the CLI with the most common parameters
 
 ```bash
@@ -149,21 +179,15 @@ max_output_tokens = 8192
 sot-cli
 
 # Or override the provider explicitly
-sot-cli --provider [ollama/lmstudio/openrouter/nvidia]
-# e.g. sot-cli --provider ollama
+sot-cli --provider [openrouter/lmstudio/openai/ollama/nvidia]
+# e.g. sot-cli --provider openai
 
-sot-cli --provider [ollama/lmstudio/openrouter/nvidia] --model modelName
-# e.g. sot-cli --provider openrouter --model deepseek/deepseek-v4-pro
+sot-cli --provider [openrouter/lmstudio/openai/ollama/nvidia] --model modelName
+# e.g. sot-cli --provider openai --model gpt-5-nano-2025-08-07
 
 # Resume a previous session
 sot-cli <session_id>
 ```
-
-## Platform Compatibility
-
-- ✅ **macOS**: Fully tested and compatible.
-- ✅ **Windows**: Fully tested and compatible.
-- ✅ **Linux**: Fully tested and compatible.
 
 ## 🧠 The Core Concept: The SoT Method
 
