@@ -20,9 +20,10 @@ This means the conversation history is kept clean and lightweight, containing on
 ### Core Principles
 
 1.  **The Ephemeral SoT Block:** The SoT is a special `user` message, typically formatted with clear headers. Crucially, **this block is never saved to the permanent conversation history.** Once the model responds, the SoT block used for that turn is discarded.
-2.  **Lightweight Tool Results:** In a naive system, the result of a `read_file` tool would be the entire file's content. In the SoT method, the `tool` role message contains only lightweight metadata.
+2.  **Lightweight Tool Results:** In a naive system, the result of a `read_files` tool would be the entire file's content. In the SoT method, the `tool` role message contains only lightweight metadata.
     - **Bad:** `{"role": "tool", "content": "console.log('hello world'); ..."}`
     - **Good (SoT):** `{"role": "tool", "content": "read /path/to/file.js (1 line, 30 bytes) -> added to SoT"}`
+    - **Symmetric trim on the way OUT:** when a turn's payload is rebuilt for the next inference, the runtime also elides heavy `arguments` from past mutation tool_calls (`write_file`, `edit_files`) since the post-mutation file content is already in the next turn's SoT block. The tool_call envelope (id, function name, paths) survives so the model retains a complete narrative of WHAT it did to WHICH path; only the redundant body is replaced with `<elided: in SoT>`.
 3.  **Solving "Lost in the Middle" & Recency Bias:** If the massive SoT block is placed at the very end of the payload, the AI often forgets the user's actual instruction (Lost in the Middle). Furthermore, OpenAI-compatible APIs strictly require `tool` messages to follow `assistant` messages during a tool loop.
     **The Solution:** The SoT block is injected _just before_ the latest user prompt (or the latest ongoing tool-call chain).
     Payload order: `[System Prompt] -> [Past Chat History] -> [SoT Block] -> [Latest User Prompt]`. This ensures the model reads the rules, sees the state of the world, and _finally_ reads the exact instruction it needs to execute.
@@ -66,7 +67,7 @@ _Notice how the SoT is injected right before the user's new instruction._
 
 ### Iteration 2: Editing the File
 
-The model calls the `edit_file` tool. The system applies the change to the file on disk, saves the assistant's response to the history, and **discards the old SoT block**.
+The model calls the `edit_files` tool. The system applies the change to the file on disk, saves the assistant's response to the history, and **discards the old SoT block**.
 
 **JSON Payload Sent to API (Round 3):**
 
@@ -77,8 +78,8 @@ The model calls the `edit_file` tool. The system applies the change to the file 
   { "role": "assistant", "content": null, "tool_calls": [{ "name": "read_files", "args": { "files": [{ "path": "/path/to/file.js" }] } }] },
   { "role": "tool", "content": "batch read 1/1 ok (0 errors) -> SoT updated" },
   { "role": "user", "content": "change it to say universe instead of world" },
-  { "role": "assistant", "content": null, "tool_calls": [{ "name": "edit_file", "args": { "path": "/path/to/file.js", "old": "world", "new": "universe" } }] },
-  { "role": "tool", "content": "update /path/to/file.js (replaced 1, now 33 bytes) -> SoT refreshed" },
+  { "role": "assistant", "content": null, "tool_calls": [{ "name": "edit_files", "args": { "files": [{ "path": "/path/to/file.js", "edits": [{ "old_string": "world", "new_string": "universe" }] }] } }] },
+  { "role": "tool", "content": "edit_files: 1/1 ok. - update /path/to/file.js (1 atomic edits, 33 bytes; SoT will be refreshed if file was already tracked)" },
   {
     "role": "user",
     "content": [

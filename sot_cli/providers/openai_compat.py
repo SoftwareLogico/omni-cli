@@ -10,6 +10,273 @@ from sot_cli.message_builder import build_user_turn_message
 from sot_cli.providers.base import ProviderCapability, ProviderCompletion, ProviderEvent, ProviderRequest
 
 
+# ─── Outbound message sanitizer ──────────────────────────────────────────
+#
+# Tool names whose ``arguments`` payload becomes REDUNDANT once the file
+# is in the SoT: re-sending the full file body (or the full list of
+# new_string blocks) on every subsequent request is pure token waste —
+# the post-mutation file content is already in the next turn's
+# '=== SOURCE OF TRUTH ===' block.
+#
+# The sanitizer keeps the tool_call envelope intact (so the model still
+# sees "I called write_file on /x" in its history AND the OpenAI-strict
+# tool_call ↔ tool message pairing invariant is preserved) but trims the
+# heavy fields out of the arguments JSON. See _trim_mutation_arguments.
+_MUTATION_TOOLS_FOR_ARGS_TRIMMING: frozenset[str] = frozenset({
+    "edit_files",
+    "write_file",
+})
+
+# Inline marker the model sees in trimmed arguments. Short, self-explanatory,
+# and unique enough to be searchable in transcripts when debugging.
+_ELIDED_MARKER = "<elided: in SoT>"
+
+# Generic fallback when JSON parsing of a mutation tool's arguments fails
+# (rare — would imply the model emitted malformed JSON in arguments). Stays
+# valid JSON so we never break a downstream parser.
+_GENERIC_ELIDED_ARGS = '{"_summary": "args elided; result is in SoT"}'
+
+
+def _trim_mutation_arguments(tool_name: str, raw_arguments: str) -> str:
+    """Return a token-light replacement for a mutation tool_call's arguments.
+
+    Strategy (Shape A2):
+      * Parse the original arguments JSON.
+      * Keep tiny metadata fields the model actually wants to remember
+        (paths) so it knows WHICH file(s) it touched on this round.
+      * Replace heavy redundant fields (file content, edit_string lists)
+        with :data:`_ELIDED_MARKER` — the model can read the post-mutation
+        result from the SoT block on the next turn.
+      * Re-serialize.
+
+    On any failure (non-JSON args, unexpected shape) fall back to
+    :data:`_GENERIC_ELIDED_ARGS` rather than the verbatim original — the
+    point of this whole function is to make sure the heavy content does
+    NOT round-trip even when something goes wrong with the trim.
+    """
+    try:
+        parsed = json.loads(raw_arguments) if isinstance(raw_arguments, str) else None
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return _GENERIC_ELIDED_ARGS
+
+    if not isinstance(parsed, dict):
+        return _GENERIC_ELIDED_ARGS
+
+    if tool_name == "write_file":
+        # Schema: {"path": str, "content": str}. Keep path; elide content.
+        trimmed: dict[str, Any] = {}
+        if "path" in parsed:
+            trimmed["path"] = parsed["path"]
+        if "content" in parsed:
+            trimmed["content"] = _ELIDED_MARKER
+        return json.dumps(trimmed, ensure_ascii=False)
+
+    if tool_name == "edit_files":
+        # Schema: {"files": [{"path": str, "edits": [...]}, ...]}. Keep
+        # the list of paths so the model remembers which files it touched;
+        # elide the edits payload of each entry.
+        files = parsed.get("files")
+        if not isinstance(files, list):
+            return _GENERIC_ELIDED_ARGS
+        trimmed_files: list[dict[str, Any]] = []
+        for entry in files:
+            if not isinstance(entry, dict):
+                continue
+            trimmed_entry: dict[str, Any] = {}
+            if "path" in entry:
+                trimmed_entry["path"] = entry["path"]
+            if "edits" in entry:
+                trimmed_entry["edits"] = _ELIDED_MARKER
+            trimmed_files.append(trimmed_entry)
+        return json.dumps({"files": trimmed_files}, ensure_ascii=False)
+
+    return _GENERIC_ELIDED_ARGS
+
+
+def _is_effectively_empty_text(value: Any) -> bool:
+    """True for values that the strict APIs treat as 'no content'.
+
+    None and whitespace-only strings both count: LM Studio and the
+    OpenAI strict validator both expect a non-empty string when an
+    assistant message has no tool_calls. The model emitting ``"\\n\\n"``
+    next to a stripped tool_call (a thought-bubble that points to
+    nothing) is functionally the same problem, so we treat them
+    identically here.
+    """
+    if value is None:
+        return True
+    if isinstance(value, str) and value.strip() == "":
+        return True
+    return False
+
+
+def _sanitize_messages_for_provider(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Strict-API firewall + SoT-aware mutation-args trimming before send.
+
+    Three independent responsibilities, all required before the chat
+    reaches ANY OpenAI-compatible provider:
+
+    1. **Schema strictness — drop empty husks.** Assistant messages with
+       ``content: null`` (or whitespace-only) and no ``tool_calls`` are
+       rejected by LM Studio (HTTP 500) and by OpenAI strict (HTTP 400).
+       Drop them. Tool-role messages with ``content: null`` are coerced
+       to ``content: ""`` instead of dropped, because dropping would
+       orphan the matching ``tool_call``.
+
+    2. **Tool-call ↔ tool-message pairing invariant.** OpenAI strict
+       requires every ``tool_call`` emitted by an assistant to be
+       followed by exactly one ``tool``-role message carrying the same
+       ``tool_call_id`` (and vice-versa). Streaming interruptions,
+       Ctrl+C aborts mid-tool-execution, and message replays can leave
+       three pathological shapes in chat_history:
+
+       * a ``tool_call`` with ``arguments: ""`` (stream cut before the
+         args delta arrived);
+       * a ``tool_call`` with no matching ``tool`` response anywhere;
+       * a ``tool_call`` with the same ``id`` as a previous one whose
+         response has already been consumed (duplicate from a retry).
+
+       All three trigger HTTP 5xx / 400 from strict providers. We do a
+       two-pass walk: pass 1 indexes which ``tool_call_id``s have a
+       responding ``tool`` message in this batch; pass 2 emits in
+       order, single-use-matching each ``tool_call`` against a pending
+       set so duplicates and orphans are dropped silently. Companion
+       ``tool`` messages whose call was dropped (or never existed) are
+       dropped too.
+
+    3. **Token economy via SoT-aware args trimming.** Every surviving
+       ``tool_call`` whose function name is in
+       :data:`_MUTATION_TOOLS_FOR_ARGS_TRIMMING` has its ``arguments``
+       JSON passed through :func:`_trim_mutation_arguments`, which
+       keeps the path metadata and elides the heavy redundant fields
+       (file content, edit strings). The tool_call envelope and the
+       matching tool-response message both stay intact, so the model
+       retains a complete narrative of WHAT it did to WHICH path on
+       every turn, without the multi-thousand-token re-paste of file
+       content it can already read in the SoT block.
+
+    Notes deliberately NOT done here:
+
+    * ``reasoning`` and ``reasoning_details`` are LEFT ON the message.
+      OpenRouter and the Anthropic / GPT-5 reasoning class require
+      reasoning details to be round-tripped to maintain reasoning
+      continuity; stripping them blindly would silently degrade those
+      providers.
+    * Messages are shallow-copied; the caller's chat_history is never
+      mutated (the same list is reused across rounds and across turns).
+    """
+    # ── Pass 1: index every tool_call_id that has a matching tool message ──
+    # We will only allow a tool_call through if the chat history contains
+    # at least one tool message responding to it. Single-use matching in
+    # pass 2 prevents one tool message from satisfying multiple duplicate
+    # tool_calls.
+    tool_response_ids: set[str] = set()
+    for entry in messages:
+        if not isinstance(entry, dict) or entry.get("role") != "tool":
+            continue
+        tc_id = entry.get("tool_call_id")
+        if isinstance(tc_id, str) and tc_id:
+            tool_response_ids.add(tc_id)
+
+    sanitized: list[dict[str, Any]] = []
+    pending_tool_call_ids: set[str] = set()
+    consumed_tool_call_ids: set[str] = set()
+
+    for original in messages:
+        if not isinstance(original, dict):
+            # Malformed entry; the provider would reject it anyway. Skip
+            # silently rather than crashing the whole payload build.
+            continue
+        msg = dict(original)
+        role = msg.get("role")
+
+        if role == "user":
+            if msg.get("content") is None:
+                continue
+            sanitized.append(msg)
+            continue
+
+        if role == "assistant":
+            tool_calls = msg.get("tool_calls")
+            if isinstance(tool_calls, list) and tool_calls:
+                surviving_calls: list[dict[str, Any]] = []
+                for tc in tool_calls:
+                    if not isinstance(tc, dict):
+                        continue
+                    tc_id = tc.get("id")
+                    if not isinstance(tc_id, str) or not tc_id:
+                        # Tool_call without a usable id — provider would
+                        # reject and we cannot pair it with a response.
+                        continue
+                    func = tc.get("function") if isinstance(tc.get("function"), dict) else None
+                    if not isinstance(func, dict):
+                        continue
+                    name = func.get("name", "") if isinstance(func.get("name"), str) else ""
+                    args = func.get("arguments", "")
+                    if not isinstance(args, str) or args == "":
+                        # Stream cut before args delta arrived. Drop —
+                        # provider rejects "" args.
+                        continue
+                    if tc_id not in tool_response_ids:
+                        # Orphan: no tool message in this batch will pair
+                        # with us. Drop to preserve the strict invariant.
+                        continue
+                    if tc_id in consumed_tool_call_ids:
+                        # Duplicate of a previous tool_call whose response
+                        # has already been consumed; the matching tool
+                        # message was single-use-paired with the earlier
+                        # call. Drop the duplicate.
+                        continue
+                    if tc_id in pending_tool_call_ids:
+                        # Two tool_calls in a row with the same id and no
+                        # tool message between them. Drop the second.
+                        continue
+
+                    if name in _MUTATION_TOOLS_FOR_ARGS_TRIMMING:
+                        new_tc = dict(tc)
+                        new_func = dict(func)
+                        new_func["arguments"] = _trim_mutation_arguments(name, args)
+                        new_tc["function"] = new_func
+                        surviving_calls.append(new_tc)
+                    else:
+                        surviving_calls.append(tc)
+                    pending_tool_call_ids.add(tc_id)
+
+                if surviving_calls:
+                    msg["tool_calls"] = surviving_calls
+                else:
+                    msg.pop("tool_calls", None)
+
+            content_is_empty = _is_effectively_empty_text(msg.get("content"))
+            has_tool_calls = bool(msg.get("tool_calls"))
+            if content_is_empty and not has_tool_calls:
+                continue
+
+            sanitized.append(msg)
+            continue
+
+        if role == "tool":
+            tc_id = msg.get("tool_call_id")
+            if not isinstance(tc_id, str) or not tc_id:
+                # Malformed tool message without an id — cannot pair.
+                continue
+            if tc_id not in pending_tool_call_ids:
+                # Either no preceding tool_call (orphan) or the call was
+                # already consumed by a previous tool message. Drop.
+                continue
+            pending_tool_call_ids.discard(tc_id)
+            consumed_tool_call_ids.add(tc_id)
+            if msg.get("content") is None:
+                msg["content"] = ""
+            sanitized.append(msg)
+            continue
+
+        # role == "system" or anything unknown: forward as-is.
+        sanitized.append(msg)
+
+    return sanitized
+
+
 def _write_session_json(label: str, data: Any, session_id: str = "") -> Path:
     """Write a JSON blob to the session directory."""
     import os
@@ -409,7 +676,7 @@ def _is_openai_reasoning_model(model: str) -> bool:
 
 
 def build_chat_completions_payload(request: ProviderRequest, resolved_model: str) -> dict[str, Any]:
-    messages = request.conversation_messages or [
+    raw_messages = request.conversation_messages or [
         {"role": "system", "content": request.system_prompt},
         {
             "role": "user",
@@ -420,6 +687,14 @@ def build_chat_completions_payload(request: ProviderRequest, resolved_model: str
             ),
         },
     ]
+    # Strict-API firewall + SoT-aware token-economy pruning. See
+    # _sanitize_messages_for_provider's docstring for the full rationale;
+    # in short: drops malformed null-content shapes that crash strict
+    # validators (LM Studio HTTP 500, OpenAI HTTP 400) AND strips
+    # redundant edit_files / write_file tool_call args (and their tool
+    # responses) since the post-mutation file content is already in the
+    # next turn's SoT block.
+    messages = _sanitize_messages_for_provider(raw_messages)
 
     is_openai = request.provider_name == "openai"
     is_openrouter = request.provider_name == "openrouter"

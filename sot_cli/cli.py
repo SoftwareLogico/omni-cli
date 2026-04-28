@@ -1900,7 +1900,10 @@ async def _run_prompt(
             try:
                 prompt = await prompt_session.prompt_async(
                     HTML("<b><cyan>you&gt;</cyan></b> "),
-                    prompt_continuation="... ",
+                    # No visible continuation prefix on multiline input —
+                    # selecting and copying multi-line prompts now yields
+                    # only the user's text, no leading "... " markers.
+                    prompt_continuation="",
                 )
             except (EOFError, KeyboardInterrupt):
                 console.print("\n[dim]chat ended[/dim]")

@@ -786,18 +786,47 @@ def _build_tool_result_summary(tool_result: Any) -> str:
             return f"opened {fpath} with {application}"
         return f"opened {fpath} with default application"
 
-    if name == "edit_file":
-        fpath = payload.get("path", "?")
-        op = payload.get("operation", "update")
-        replaced = payload.get("occurrences_replaced", "?")
-        size = payload.get("size_bytes", "?")
-        return f"{op} {fpath} (replaced {replaced}, now {size} bytes). SoT already has the updated version — do not re-read."
+    if name == "edit_files":
+        results = payload.get("results") or []
+        summary = payload.get("summary") or {}
+        total = summary.get("total", len(results) if isinstance(results, list) else 0)
+        succeeded = summary.get("succeeded", 0)
+        failed = summary.get("failed", 0)
+        if not isinstance(results, list) or not results:
+            return f"edit_files: {succeeded}/{total} ok, {failed} failed."
 
-    if name == "apply_text_edits":
-        fpath = payload.get("path", "?")
-        edit_count = payload.get("edit_count", "?")
-        size = payload.get("size_bytes", "?")
-        return f"updated {fpath} ({edit_count} atomic edits, now {size} bytes). SoT already has the updated version — do not re-read."
+        # Per-file one-liners. Successful entries report op + edit_count and
+        # an explicit SoT-status note so the model never has to guess whether
+        # a re-read is needed:
+        #   - "create" → always added to SoT.
+        #   - "update" → refreshed only when the path was already in SoT
+        #     (or under a session-attached source entry); silently NOT
+        #     injected otherwise.
+        lines: list[str] = []
+        for entry in results:
+            if not isinstance(entry, dict):
+                continue
+            fpath = entry.get("path") or "?"
+            if entry.get("ok"):
+                op = entry.get("operation", "update")
+                edit_count = entry.get("edit_count", "?")
+                size = entry.get("size_bytes", "?")
+                if op == "create":
+                    sot_note = "added to SoT"
+                else:
+                    sot_note = "SoT will be refreshed if file was already tracked"
+                lines.append(f"  - {op} {fpath} ({edit_count} atomic edits, {size} bytes; {sot_note})")
+            else:
+                err = entry.get("error", "unknown error")
+                lines.append(f"  - FAILED {fpath}: {err}")
+
+        header = (
+            f"edit_files: {succeeded}/{total} ok"
+            + (f", {failed} failed" if failed else "")
+            + ". Created files are now in the SoT (no need to read_files them); "
+            + "updates only refresh paths that were already tracked — see per-file notes below."
+        )
+        return header + "\n" + "\n".join(lines)
 
     if name == "write_file":
         fpath = payload.get("path", "?")

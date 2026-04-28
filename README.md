@@ -27,7 +27,7 @@ The name `sot-cli` is a direct nod to the architectural pattern it is built arou
 - **📊 SoT Method**: Fresh files from disk every turn. No token bloat, always up-to-date.
 - **🤖 Async Multi-Agent**: Delegate trial-and-error to cheap sub-agents (empty ctx).
 - **⚡ Batch Orchestration**: Multi-tools + bash/Python scripts in ONE turn.
-- **🔧 Full Tools**: 21+ incl. unrestricted shell, regex code search, precise edits, MCP extensible.
+- **🔧 Full Tools**: 19 built-in (incl. unrestricted shell, regex code search, batched multi-file surgical edits) + MCP extensible.
 - **🌐 Multi-Provider**: Switch OpenRouter/LMStudio/OpenAI/Ollama/NVIDIA live.
 - **💰 Native Prompt Caching**: Payload architecture designed for prefix-matching, saving up to 50% API costs on long histories by caching static dialogue and keeping dynamic files at the bottom.
 

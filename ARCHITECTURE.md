@@ -255,7 +255,7 @@ When to use `list_dir` vs `search_code`:
 
 Typical code exploration flow:
 
-- `search_code` to find where a symbol, function, or pattern is used → `read_files` with `start_line`/`end_line` (per-entry) to inspect the surrounding code → `edit_file` or `apply_text_edits` to make changes.
+- `search_code` to find where a symbol, function, or pattern is used → `read_files` with `start_line`/`end_line` (per-entry) to inspect the surrounding code → `edit_files` to batch every planned change across all touched files in a single atomic call.
 
 ## File Reading Tool (`read_files`)
 
@@ -275,6 +275,55 @@ Non-text behavior:
 - PDFs use `pages` rather than `start_line`/`end_line`.
 - Images, notebooks, audio, and video do not support line ranges.
 
+## File Editing Tool (`edit_files`)
+
+`edit_files` is the single tool for any text mutation. It accepts a `files` array — each entry carries its own `edits` array applied atomically per file — so one call can edit one file or many. There is no separate single-file editor.
+
+### Targeting modes (per edit, exactly one)
+
+Each edit picks ONE mode by which keys it carries. Mixing modes inside a single edit is rejected.
+
+- **Text mode** — `old_string` (+ optional `new_string`, `before_context`, `after_context`, `replace_all`). Replaces or deletes (`new_string=""`) an exact text span. `replace_all=true` expands to every match after context filtering.
+- **Line-range mode** — `start_line` + `end_line` + `new_string`. 1-indexed inclusive. Replaces the line block, or deletes it when `new_string=""`.
+- **Insert mode** — `insert_line` + `position` (`"before"` or `"after"`) + `new_string`. Pure zero-width insertion at the line boundary; the anchor line itself is never modified.
+
+### Operations expressed across the modes
+
+- Replace a known string → text mode.
+- Delete a string → text mode with `new_string=""`.
+- Replace a line block → line-range mode.
+- Delete a line block → line-range mode with `new_string=""`.
+- Insert new lines → insert mode.
+- Append at end of file → insert mode with `insert_line=last_line` and `position="after"`.
+- Replace every match → text mode with `replace_all=true`.
+- Disambiguate between identical strings → text mode with `before_context`/`after_context` instead of enlarging `old_string`.
+- Create a new file → exactly one entry in `files` with a single text-mode edit: `old_string=""` and `new_string=<full_content>`.
+
+### Atomicity
+
+- **Within a file:** all of that file's edits are resolved against the ORIGINAL content first, then spliced in descending offset order. If any edit fails (target not found, line out of range, overlap), nothing in that file is written — the file on disk is untouched.
+- **Across files:** per-file independent. One file's failure does not roll back another file's success. The response carries a per-file `results` array with `ok=true/false`; the model can re-emit only the failing entries on the next turn.
+
+### Surgical guarantees per file
+
+- Edits cannot overlap in the original file. Two edits may not share a boundary if either is zero-width (an insert touching another edit) — those must be merged into a single edit with the combined `new_string`.
+- Indentation is the model's responsibility — bytes go through verbatim. In whitespace-sensitive languages (Python, YAML, Makefile) the emitted tabs/spaces become the file's tabs/spaces.
+- Line endings (LF vs CRLF) are auto-matched to the existing file. Inserts auto-add the file's separator so they never fuse with adjacent lines, and prepend one when appending past an EOF that lacked a trailing newline.
+- Curly/typographic quotes in the file are tolerated transparently for matching; replacements respect the file's quote style.
+- `old_string=""` is reserved for file creation; it is rejected on existing files.
+
+### SoT update policy (asymmetric on purpose)
+
+- **`operation == "create"`** (file did not exist before this call): the new file is **always** added to the SoT. The model can reason on top of it on the next turn without a separate `read_files` call.
+- **`operation == "update"`** on a path **already in the SoT** (read previously, or session-attached): the SoT is refreshed from disk on the next turn so the post-edit content is visible automatically.
+- **`operation == "update"`** on a path **not in the SoT** and not session-backed: the file is updated on disk but **not** auto-injected into the SoT. The tool result reports the success; the model's context stays clean. If the model needs that file in the SoT afterwards it must read it explicitly.
+
+This asymmetry optimises for the common case (create-then-work-with-it) while preventing silent context bloat from incidental edits to files the model never tracked.
+
+### History and token economy
+
+The provider-bound payload sanitizer trims the heavy fields out of mutation tool_call arguments before sending the chat history to the model. Concretely: the `edit_files` tool_call envelope (id, function name, paths) survives so the model retains a complete narrative of WHAT it did to WHICH path, but the per-edit `new_string` blocks (which can be thousands of tokens of code per file) are replaced with `<elided: in SoT>`. The post-mutation content is already in the next turn's SoT block, so re-shipping it on every request is pure waste. The same trimming applies to `write_file`'s `content` field. See `sot_cli/providers/openai_compat.py::_trim_mutation_arguments`.
+
 ## Main components
 
 ### `sot_cli/query.py`
@@ -290,6 +339,21 @@ Modern APIs (like Anthropic and OpenAI) cache tokens from top to bottom. If a si
 
 - If we put the dynamic SoT at the _top_, every time a file is edited, the cache would break, and you would pay full price to re-process the entire 100k+ token chat history.
 - By putting the static `Chat History` at the top and the dynamic `SoT Block` at the bottom, the API successfully caches the system prompt and your entire conversation history. The cache only breaks at the very end of the payload when a file changes. This architectural decision makes long sessions incredibly fast and cheap.
+
+### `sot_cli/providers/openai_compat.py` — Outbound Payload Sanitizer
+
+The last transformation before the chat payload reaches the network. Lives in `_sanitize_messages_for_provider` and runs on every `build_chat_completions_payload` call. It enforces three independent invariants:
+
+**1. Schema strictness — drop empty husks.**
+Streaming interruptions (Ctrl+C mid-generation, network drops, reasoning-budget cuts) and partial responses can leave an assistant message with `content: null` (or whitespace-only) and no `tool_calls` in `chat_history`. LM Studio rejects that shape with HTTP 500; OpenAI strict rejects it with 400. The sanitizer drops those husks. Tool-role messages with `content: null` are coerced to `content: ""` instead of dropped, because dropping would orphan the matching `tool_call`.
+
+**2. Tool-call ↔ tool-message pairing.**
+OpenAI strict requires every assistant `tool_call` to be followed by exactly one `tool`-role message carrying the same `tool_call_id` (and vice-versa). Three pathological shapes can land in `chat_history`: a `tool_call` with `arguments: ""` (stream cut before the args delta arrived), a `tool_call` with no matching `tool` response anywhere (assistant emitted but tool never executed), and a `tool_call` whose `id` is duplicated by a later assistant retry. All three trigger HTTP 5xx / 400 from strict providers, with generic error bodies that hide which message was malformed. The sanitizer does a two-pass walk: pass 1 indexes which `tool_call_id`s have a responding `tool` message in this batch; pass 2 emits messages in order, single-use-matching each `tool_call` against a pending set so duplicates and orphans are dropped silently. Companion `tool` messages whose call was dropped (or never existed) are dropped too. The chat history on disk is never mutated — sanitization happens on shallow copies for the outbound payload only.
+
+**3. Token economy via SoT-aware args trimming.**
+Every surviving `tool_call` whose function name is in `_MUTATION_TOOLS_FOR_ARGS_TRIMMING` (`edit_files`, `write_file`) has its `arguments` JSON passed through `_trim_mutation_arguments`, which keeps the path metadata and replaces the heavy redundant fields (`content` for `write_file`, each `files[*].edits` for `edit_files`) with the marker `<elided: in SoT>`. The tool_call envelope (id, type, function name) and the matching tool-response message both stay intact, so the model retains a complete narrative of WHAT it did to WHICH path on every turn — without re-shipping the multi-thousand-token file contents that the next turn's `=== SOURCE OF TRUTH ===` block already carries fresh from disk. In practice this saves on the order of tens of thousands of tokens per long session compared to the naive "include the full mutation arguments verbatim every turn" baseline.
+
+Reasoning fields (`reasoning`, `reasoning_details`) are deliberately LEFT ON every assistant message. OpenRouter and the Anthropic / GPT-5 reasoning class require reasoning details to be round-tripped to maintain reasoning continuity across turns; stripping them blindly would silently degrade those providers.
 
 ### `sot_cli/source_of_truth.py`
 
@@ -372,7 +436,7 @@ Change runtime parameters for future turns in the current session: `title`, `pro
 ## Known current limitations
 
 1. Resume/recovery currently depends on reconstructing `chat_history` and SoT state from persisted request/response artifacts.
-2. `edit_file` makes a single exact-match replacement per call. `apply_text_edits` batches multiple edits (text matching or line ranges) atomically in one call. Neither is a regex engine nor an AST editor.
+2. `edit_files` is a surgical text mutator (text-match, line-range, or insert mode), atomic per file and batchable across many files in one call. It is not a regex engine nor an AST editor.
 3. `read_files` supports targeted line-range reads (per `files[]` entry) for any UTF-8 text file, but partial reads intentionally do not populate the SoT as full-file snapshots.
 4. `search_code` requires [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) to be installed and available in PATH.
 5. Archive files (`zip`, `tar`, `gz`, etc.) cannot be read directly. The model receives a format-specific error with the correct `run_command` invocation to list or extract contents.

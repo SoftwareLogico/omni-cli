@@ -4,12 +4,11 @@ from typing import Any
 
 from sot_cli.config import KNOWN_PROVIDERS
 from sot_cli.config.prompts import (
-    APPLY_TEXT_EDITS_PROMPT,
     ATTACH_PATH_PROMPT,
     DELEGATE_TASK_PROMPT,
     DELETE_FILE_PROMPT,
     DETACH_PATH_PROMPT,
-    EDIT_FILE_PROMPT,
+    EDIT_FILES_PROMPT,
     GET_SESSION_STATE_PROMPT,
     LIST_DIR_PROMPT,
     LIST_COMMANDS_PROMPT,
@@ -209,57 +208,7 @@ def get_tool_schemas() -> list[dict[str, Any]]:
                 },
             },
         },
-        {
-            "type": "function",
-            "function": {
-                "name": "edit_file",
-                "description": EDIT_FILE_PROMPT,
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "Absolute path or project-relative path to the file."},
-                        "old_string": {"type": "string", "description": "Exact text to find and replace."},
-                        "new_string": {"type": "string", "description": "Replacement text."},
-                        "replace_all": {"type": "boolean", "description": "If true, replace all matches instead of requiring a unique match."},
-                    },
-                    "required": ["path", "old_string", "new_string"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "apply_text_edits",
-                "description": APPLY_TEXT_EDITS_PROMPT,
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {"type": "string", "description": "Absolute path or project-relative path to the file."},
-                        "edits": {
-                            "type": "array",
-                            "minItems": 1,
-                            "description": "Sequential list of atomic edits to apply in memory before writing the file.",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "new_string": {"type": "string", "description": "Replacement text for this edit."},
-                                    "old_string": {"type": "string", "description": "Exact text to replace. Use this or start_line/end_line."},
-                                    "start_line": {"type": "integer", "minimum": 1, "description": "1-indexed starting line for an exact block replacement."},
-                                    "end_line": {"type": "integer", "minimum": 1, "description": "1-indexed ending line for an exact block replacement."},
-                                    "before_context": {"type": "string", "description": "Optional exact text that must appear immediately before old_string."},
-                                    "after_context": {"type": "string", "description": "Optional exact text that must appear immediately after old_string."},
-                                },
-                                "required": ["new_string"],
-                                "additionalProperties": False,
-                            },
-                        },
-                    },
-                    "required": ["path", "edits"],
-                    "additionalProperties": False,
-                },
-            },
-        },
+        _edit_files_schema(),
         {
             "type": "function",
             "function": {
@@ -428,3 +377,168 @@ def get_tool_schemas() -> list[dict[str, Any]]:
             },
         },
     ]
+
+
+# ─── Schema builders extracted to keep get_tool_schemas readable ─────────
+
+
+def _edit_files_schema() -> dict[str, Any]:
+    """Build the ``edit_files`` tool schema.
+
+    Lifted out of ``get_tool_schemas`` because the nested shape is deep
+    (``files[]`` → ``edits[]`` → per-edit field grid) and inlining it
+    pushed indentation past the point where misnested braces become hard
+    to spot.
+    """
+    edit_item = {
+        "type": "object",
+        "description": (
+            "Each edit picks EXACTLY ONE targeting mode by which keys it carries: "
+            "text mode (old_string), line-range mode (start_line + end_line), or "
+            "insert mode (insert_line + position). Mixing keys across modes is "
+            "rejected."
+        ),
+        "properties": {
+            "new_string": {
+                "type": "string",
+                "description": (
+                    "Replacement text for replace/line-range modes, or the content "
+                    "to insert in insert mode. Set to \"\" to delete the targeted "
+                    "span (text or line-range only — insert mode rejects empty "
+                    "new_string as a no-op)."
+                ),
+            },
+            "old_string": {
+                "type": "string",
+                "description": (
+                    "TEXT MODE. Exact text to replace. Must be unique in the file "
+                    "unless replace_all=true or you supply before_context/"
+                    "after_context to disambiguate. Reserve old_string=\"\" for "
+                    "the file-creation special case (single-edit batch for that "
+                    "file against a non-existent path)."
+                ),
+            },
+            "before_context": {
+                "type": "string",
+                "description": (
+                    "TEXT MODE only. Exact text that must appear immediately "
+                    "before old_string for a candidate to be considered a match — "
+                    "use this to pick the right occurrence without enlarging "
+                    "old_string."
+                ),
+            },
+            "after_context": {
+                "type": "string",
+                "description": (
+                    "TEXT MODE only. Exact text that must appear immediately after "
+                    "old_string for a candidate to be considered a match."
+                ),
+            },
+            "replace_all": {
+                "type": "boolean",
+                "description": (
+                    "TEXT MODE only. When true, replace every occurrence of "
+                    "old_string (after context filtering) instead of requiring a "
+                    "single unique match."
+                ),
+            },
+            "start_line": {
+                "type": "integer",
+                "minimum": 1,
+                "description": (
+                    "LINE-RANGE MODE. 1-indexed first line of the block to replace "
+                    "or delete. Must be combined with end_line."
+                ),
+            },
+            "end_line": {
+                "type": "integer",
+                "minimum": 1,
+                "description": (
+                    "LINE-RANGE MODE. 1-indexed last line (inclusive) of the block "
+                    "to replace or delete. Must be >= start_line."
+                ),
+            },
+            "insert_line": {
+                "type": "integer",
+                "minimum": 1,
+                "description": (
+                    "INSERT MODE. 1-indexed reference line. The insertion is "
+                    "zero-width and never modifies this line's contents — only "
+                    "the position before/after it."
+                ),
+            },
+            "position": {
+                "type": "string",
+                "enum": ["before", "after"],
+                "description": (
+                    "INSERT MODE. \"before\" places new_string just before the "
+                    "line at insert_line; \"after\" places it just after. Use "
+                    "insert_line=N, position=\"after\" with N=last line to append "
+                    "at end of file."
+                ),
+            },
+        },
+        "required": ["new_string"],
+        "additionalProperties": False,
+    }
+
+    file_item = {
+        "type": "object",
+        "description": "One file's edit batch. The 'edits' array is atomic for THIS file.",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": (
+                    "Absolute path or project-relative path to the file. If the "
+                    "file does not exist and this entry has exactly one text-mode "
+                    "edit with old_string=\"\", the file is created."
+                ),
+            },
+            "edits": {
+                "type": "array",
+                "minItems": 1,
+                "description": (
+                    "One or more atomic edits applied to THIS file as a single "
+                    "transaction. Resolved against the ORIGINAL content of THIS "
+                    "file, then spliced in descending offset order, so line "
+                    "numbers and anchors stay valid across edits. If any edit "
+                    "fails (target not found, overlap, out-of-range line) NOTHING "
+                    "in this file is written; other files in the same call are "
+                    "unaffected. ALWAYS prefer batching multi-edit changes in "
+                    "this array over splitting them across calls."
+                ),
+                "items": edit_item,
+            },
+        },
+        "required": ["path", "edits"],
+        "additionalProperties": False,
+    }
+
+    return {
+        "type": "function",
+        "function": {
+            "name": "edit_files",
+            "description": EDIT_FILES_PROMPT,
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "files": {
+                        "type": "array",
+                        "minItems": 1,
+                        "description": (
+                            "One or more files to edit in a single batched call. "
+                            "Each entry is independent: a failure on one file does "
+                            "NOT roll back another file's success. The response "
+                            "carries a per-file results array. ALWAYS prefer "
+                            "batching multi-file edits into one call over multiple "
+                            "single-file calls — this is what this tool exists "
+                            "for, exactly like read_files for the read side."
+                        ),
+                        "items": file_item,
+                    },
+                },
+                "required": ["files"],
+                "additionalProperties": False,
+            },
+        },
+    }

@@ -49,6 +49,9 @@ _ORCHESTRATION_FINGERPRINTS = (
     "TOOL STRATEGY",
     "TOKEN ECONOMY & BATCHING",
     "HOST ENVIRONMENT",
+    "You are in agent mode.",
+    "You are in sub-agent mode.",
+    "BATCH FILE READS",
 )
 
 
@@ -165,11 +168,64 @@ def update_tracked_from_tool_result(
             _update_single_read_result(state, item, current_messages)
         return
 
-    if tool_name in {"edit_file", "apply_text_edits", "write_file"}:
+    if tool_name == "write_file":
         fpath = payload.get("path")
         if isinstance(fpath, str) and fpath:
             state.tracked_files.setdefault(fpath, "")
             if _is_session_backed_path(fpath, state.session_source_entries):
+                state.session_tracked_file_paths.add(fpath)
+        return
+
+    if tool_name == "edit_files":
+        # Multi-file edit: per-file results steer the SoT refresh policy.
+        #
+        # Rules (intentional asymmetry between create and update):
+        #
+        #   - operation == "create" → ALWAYS add to the SoT. A freshly
+        #     created file is almost always something the model will work
+        #     with on the next turn; auto-injecting saves the turn it would
+        #     otherwise waste calling read_files. The cost is bounded
+        #     because edit_files creation goes through the model's output
+        #     budget — large generated dumps would use write_file or
+        #     run_command with redirection instead. If the model decides it
+        #     does NOT want the new file tracked it can call detach_path.
+        #
+        #   - operation == "update" on a path ALREADY tracked (or under a
+        #     permanently-attached source entry) → refresh from disk on the
+        #     next turn so the SoT shows the post-edit content.
+        #
+        #   - operation == "update" on a path NOT in the SoT and NOT
+        #     session-backed → DO NOT inject. The tool result tells the
+        #     model "file X updated"; the SoT/context stays clean. Silently
+        #     adding unknown files would bloat the context for no benefit
+        #     (the model already has the success report).
+        results = payload.get("results")
+        if not isinstance(results, list):
+            return
+        for entry in results:
+            if not isinstance(entry, dict) or not entry.get("ok"):
+                continue
+            fpath = entry.get("path")
+            if not isinstance(fpath, str) or not fpath:
+                continue
+
+            operation = entry.get("operation")
+            is_session_backed = _is_session_backed_path(fpath, state.session_source_entries)
+
+            if operation == "create":
+                state.tracked_files.setdefault(fpath, "")
+                if is_session_backed:
+                    state.session_tracked_file_paths.add(fpath)
+                continue
+
+            # operation == "update" path
+            is_already_tracked = (
+                fpath in state.tracked_files or fpath in state.tracked_media
+            )
+            if not (is_already_tracked or is_session_backed):
+                continue
+            state.tracked_files.setdefault(fpath, "")
+            if is_session_backed:
                 state.session_tracked_file_paths.add(fpath)
         return
 

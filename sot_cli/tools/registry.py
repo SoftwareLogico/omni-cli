@@ -11,8 +11,7 @@ from sot_cli.config.prompts import (
 from sot_cli.providers.base import ProviderCapability
 from sot_cli.runtime import AppRuntime
 from sot_cli.tools.core import ToolExecutionResult, ToolPayload
-from sot_cli.tools.editor.apply_edits import execute_apply_text_edits
-from sot_cli.tools.editor.edit import execute_edit_file
+from sot_cli.tools.editor.apply_edits import execute_edit_files
 from sot_cli.tools.editor.write import execute_write_file
 from sot_cli.tools.fs.delete import execute_delete_file
 from sot_cli.tools.fs.list_dir import execute_list_dir
@@ -96,8 +95,7 @@ class ToolRegistry:
             "wait_command": self._wait_command,
             "wait_task": self._wait_task,
             "stop_command": self._stop_command,
-            "edit_file": self._edit_file,
-            "apply_text_edits": self._apply_text_edits,
+            "edit_files": self._edit_files,
             "write_file": self._write_file,
             "delete_file": self._delete_file,
             "get_session_state": self._get_session_state,
@@ -244,11 +242,8 @@ class ToolRegistry:
     def _open_path(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return execute_open_path(arguments, self.runtime.paths.root_dir)
 
-    def _edit_file(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return execute_edit_file(arguments, self.runtime.paths.root_dir)
-
-    def _apply_text_edits(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return execute_apply_text_edits(arguments, self.runtime.paths.root_dir)
+    def _edit_files(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        return execute_edit_files(arguments, self.runtime.paths.root_dir)
 
     def _write_file(self, arguments: dict[str, Any]) -> dict[str, Any]:
         return execute_write_file(arguments, self.runtime.paths.root_dir)
