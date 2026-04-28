@@ -32,7 +32,7 @@ import getpass
 
 from sot_cli.message_builder import detect_launch_context
 from sot_cli.prompting import prepare_turn_request
-from sot_cli.query import ConversationState, run_tool_loop
+from sot_cli.query import ConversationState, _consolidate_reasoning_details, run_tool_loop
 from sot_cli.tools.shell.run_command import try_interrupt_active_foreground
 from sot_cli.runtime import AppRuntime, bootstrap_runtime
 from sot_cli.sot import is_sot_block_content, is_orchestration_rules_content, load_sot_state_from_request_json
@@ -209,6 +209,18 @@ def _load_chat_history_from_request_jsons(session_dir: Path) -> list[dict[str, A
         if role == "user" and is_orchestration_rules_content(content):
             continue
         if role == "user" and isinstance(content, str) and content.startswith("=== CURRENT METADATA ==="):
+            continue
+        # Resumed sessions whose request.json was written before the
+        # streaming round started consolidating reasoning_details still
+        # carry one entry per token (dozens or hundreds of tiny dicts
+        # with redundant metadata). Collapse them on load so the rest
+        # of the runtime — and the provider on the next turn — sees the
+        # compact form. Idempotent: already-consolidated entries pass
+        # through unchanged.
+        if role == "assistant" and isinstance(msg.get("reasoning_details"), list):
+            cleaned = dict(msg)
+            cleaned["reasoning_details"] = _consolidate_reasoning_details(msg["reasoning_details"])
+            chat_messages.append(cleaned)
             continue
         chat_messages.append(msg)
 

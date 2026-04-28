@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import re
 import sys
 from typing import Any
 
@@ -38,6 +39,99 @@ from sot_cli.tools import ToolRegistry
 # Rich's Console.out is avoided for per-token streaming because it still
 # measures/pads/wraps each call and can inject spurious newlines between
 # small tokens; sys.stdout.write is the only truly transparent path.
+
+
+_REASONING_NEWLINE_RUN_RE = re.compile(r"\n{3,}")
+
+
+def _normalize_reasoning_whitespace(text: str) -> str:
+    """Collapse pathological newline runs in reasoning text to a paragraph break.
+
+    Reasoning streams from some providers (notably DeepSeek-V4 via OpenRouter)
+    contain dense runs of newline-only deltas — ``"\\n\\n\\n\\n\\n"`` followed
+    by a single word followed by another ``"\\n\\n\\n"``, etc. These appear
+    to be an artifact of the model's internal step pacing and carry zero
+    semantic information for downstream reasoning continuity. Collapsing any
+    run of three or more consecutive ``\\n`` to a single paragraph break
+    (``\\n\\n``) keeps every paragraph boundary the model produced while
+    cutting wire bytes meaningfully on long reasoning chains. Runs of one or
+    two newlines are left untouched (those ARE meaningful — single-line and
+    paragraph breaks).
+    """
+    if not text or "\n\n\n" not in text:
+        return text
+    return _REASONING_NEWLINE_RUN_RE.sub("\n\n", text)
+
+
+def _consolidate_reasoning_details(raw: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge consecutive per-token reasoning deltas into compact entries.
+
+    Streaming providers emit one ``reasoning_details`` entry per token chunk:
+
+    .. code-block:: json
+
+        [
+            {"type": "reasoning.text", "text": "The",   "format": "unknown", "index": 0},
+            {"type": "reasoning.text", "text": " user", "format": "unknown", "index": 0},
+            ...
+        ]
+
+    Sending those back verbatim is functionally accepted by every provider,
+    but it bloats the payload absurdly — a 30-token reasoning becomes 30
+    JSON objects with repeated ``type`` / ``format`` / ``index`` metadata.
+    Consolidating consecutive entries that share ``(type, format, index)``
+    into a single entry by concatenating their ``text`` fields cuts the
+    wire size by 10-100x while preserving the exact reasoning content the
+    provider needs for continuity. The merged ``text`` is also passed
+    through :func:`_normalize_reasoning_whitespace` to collapse pathological
+    newline runs (``\\n\\n\\n+`` → ``\\n\\n``) — paragraph structure is
+    preserved, but the dense whitespace some reasoning models emit between
+    thoughts is squeezed out.
+
+    Non-text reasoning blocks (``reasoning.encrypted`` blobs used by
+    Anthropic / GPT-5 encrypted reasoning, ``reasoning.summary``, etc.)
+    are atomic units — never merged, never normalized. Likewise, two
+    ``reasoning.text`` blocks that DIFFER in ``format`` or ``index`` stay
+    separate, because the model treats them as distinct reasoning steps.
+    """
+    if not raw:
+        return raw
+
+    consolidated: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+
+    def _is_mergeable_text(d: dict[str, Any]) -> bool:
+        return d.get("type") == "reasoning.text" and isinstance(d.get("text"), str)
+
+    def _same_group(a: dict[str, Any], b: dict[str, Any]) -> bool:
+        return (
+            _is_mergeable_text(a)
+            and _is_mergeable_text(b)
+            and a.get("format") == b.get("format")
+            and a.get("index") == b.get("index")
+        )
+
+    def _finalize(entry: dict[str, Any]) -> dict[str, Any]:
+        # Normalize whitespace ONLY on text-class reasoning. Encrypted /
+        # summary blocks are atomic and must not be touched.
+        if _is_mergeable_text(entry):
+            entry["text"] = _normalize_reasoning_whitespace(entry.get("text", ""))
+        return entry
+
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        if current is not None and _same_group(current, entry):
+            current["text"] = current.get("text", "") + entry.get("text", "")
+        else:
+            if current is not None:
+                consolidated.append(_finalize(current))
+            current = dict(entry)
+
+    if current is not None:
+        consolidated.append(_finalize(current))
+
+    return consolidated
 
 
 @dataclass(frozen=True)
@@ -254,10 +348,16 @@ async def run_tool_loop(
                 runtime.config.tools.delegated_reasoning_char_budget,
             ),
         )
-        # SoT Step 6: Clean — save assistant response to permanent history
+        # SoT Step 6: Clean — save assistant response to permanent history.
+        # reasoning_details are consolidated before persisting: streaming
+        # providers send one entry per token-delta; merging consecutive
+        # entries with the same (type, format, index) collapses dozens of
+        # JSON objects into one without losing any reasoning content.
         assistant_message = {"role": "assistant", "content": turn_result.text}
         if turn_result.reasoning_details:
-            assistant_message["reasoning_details"] = turn_result.reasoning_details
+            assistant_message["reasoning_details"] = _consolidate_reasoning_details(
+                turn_result.reasoning_details
+            )
         elif turn_result.reasoning:
             assistant_message["reasoning"] = turn_result.reasoning
         conversation_state.chat_history.append(assistant_message)
@@ -1114,7 +1214,10 @@ async def _run_streaming_round(
     assistant_message: dict[str, Any] = {"role": "assistant"}
     assistant_message["content"] = text if text else None
     if reasoning_details:
-        assistant_message["reasoning_details"] = reasoning_details
+        # Per-token streaming deltas get collapsed into the minimum
+        # number of entries before persistence; see
+        # _consolidate_reasoning_details for the exact rules.
+        assistant_message["reasoning_details"] = _consolidate_reasoning_details(reasoning_details)
     elif reasoning_parts:
         assistant_message["reasoning"] = "".join(reasoning_parts)
     if tool_calls:
