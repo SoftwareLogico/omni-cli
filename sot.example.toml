@@ -38,13 +38,13 @@ delegated_reasoning_char_budget = 8000    # same cap for sub-agent turns; 0 disa
 [providers.lmstudio]
 base_url = "http://localhost:1234/v1"
 model = "" #empty means it'll use the loaded one
-temperature = 0.2
+temperature = 0.6
 max_output_tokens = 8192
 
 [providers.openrouter]
 base_url = "https://openrouter.ai/api/v1"
 model = "x-ai/grok-4.1-fast"
-temperature = 0.2
+temperature = 0.6
 max_output_tokens = 8192
 http_referer = "https://github.com/SoftwareLogico/sot-cli"
 app_title = "sot-cli"
@@ -53,19 +53,19 @@ reasoning_effort = "medium" # options: "none" | "minimal" | "low" | "medium" | "
 [providers.nvidia]
 base_url = "https://integrate.api.nvidia.com/v1"
 model = "qwen/qwen3-coder-480b-a35b-instruct"
-temperature = 0.2
+temperature = 0.6
 max_output_tokens = 8192
 
 [providers.ollama]
 base_url = "http://localhost:11434/v1"
 model = "" #empty means it'll use the loaded one
-temperature = 0.2
+temperature = 0.6
 max_output_tokens = 8192
 
 [providers.openai] # works with OpenAI and any OpenAI-compatible API
 base_url = "https://api.openai.com/v1"
 model = "gpt-5.4-mini-2026-03-17" # required — set to your served model name
-temperature = 0.2
+temperature = 0.6
 max_output_tokens = 8192
 reasoning_effort = "medium" # options: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" — only valid for reasoning models (gpt-5/o-series); on plain gpt-4* OpenAI returns HTTP 400, comment out or delete this line for those models
 
