@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,19 @@ import httpx
 from sot_cli.constants import COMPRESSED_TOOLS
 from sot_cli.message_builder import build_user_turn_message
 from sot_cli.providers.base import ProviderCapability, ProviderCompletion, ProviderEvent, ProviderRequest
+
+
+# Word-boundary scan used by ``_is_successful_tool_response``. Matches any
+# inflection of ``fail`` (``fail``, ``fails``, ``failed``, ``failing``,
+# ``failure``, ``failures``) and ``error`` (``error``, ``errors``) as a
+# whole word, case-insensitive. The boundaries avoid false positives on
+# paths and filenames that happen to embed those substrings (e.g. an
+# edit applied to ``/tmp/error.log`` or ``fail-tests.txt`` would still
+# be classified as successful because the word lives inside a path
+# token, not as a free-standing word). Compiled once at module load
+# time so the hot sanitizer loop does not pay the regex compile cost
+# per message.
+_FAILURE_WORD_PATTERN = re.compile(r"\b(fail\w*|error\w*)\b", re.IGNORECASE)
 
 
 # ─── Outbound message sanitizer ──────────────────────────────────────────
@@ -224,19 +238,41 @@ def _is_effectively_empty_text(value: Any) -> bool:
 def _is_successful_tool_response(content: Any) -> bool:
     """Heuristic: does this tool_response report a successful mutation?
 
-    The runtime's ``_build_tool_result_summary`` uses an ``"error: ..."``
-    prefix for every failure path (see ``query.py``). We refuse to
-    compress a mutation when its response starts with that marker so
-    the model retains the verbatim error context and does not silently
-    repeat the failing call. Non-string content is treated as
-    "unknown shape, do not compress" to stay on the safe side.
+    Refuses to compress whenever the response contains a failure
+    marker. Three shapes are caught by the same word-boundary scan
+    (:data:`_FAILURE_WORD_PATTERN`):
+
+    1. **Catastrophic crash from the runtime wrapper.** When a tool
+       sets ``is_error=True``, ``_build_tool_result_summary`` in
+       ``query.py`` returns ``"error: <message>"``. The leading
+       ``error`` matches.
+    2. **Partial / total failure inside ``edit_files``.** When any
+       per-file edit does not apply, the runtime formats the summary
+       as ``"edit_files: X/Y ok, N failed. ..."`` (with at least one
+       per-file ``- FAILED <path>: <reason>`` line below). The literal
+       ``failed`` matches even though the wrapper itself returned
+       ``is_error=False`` (the tool ran, the edits did not).
+    3. **External (MCP) tool failures whose format we do not own.**
+       Any case-insensitive occurrence of ``fail*`` or ``error*`` as a
+       whole word in the response body triggers preservation. This is
+       the safety net for tool result strings produced by code outside
+       this codebase.
+
+    False positives (a successful response that happens to mention
+    "error" or "fail" — for example an edit applied to a file whose
+    path embeds one of those words) are tolerated by design. The
+    failure mode is just "preserve a successful response intact
+    instead of compressing it", strictly safer than the inverse
+    (silently compressing a failed mutation and letting the model
+    loop on it). Non-string ``content`` is treated as
+    "unknown shape, do not compress".
     """
     if not isinstance(content, str):
         return False
-    stripped = content.lstrip()
+    stripped = content.strip()
     if not stripped:
         return False
-    if stripped.lower().startswith("error"):
+    if _FAILURE_WORD_PATTERN.search(stripped):
         return False
     return True
 
