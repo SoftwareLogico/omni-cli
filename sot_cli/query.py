@@ -6,6 +6,7 @@ import re
 import sys
 from typing import Any
 
+from sot_cli.spinners import SPINNERS
 from rich.console import Console
 
 from sot_cli.constants import (
@@ -31,16 +32,9 @@ from sot_cli.tools.core import ToolExecutionResult
 from sot_cli.tools import ToolRegistry
 
 
-# Streaming policy:
-# Whatever chunk the provider emits (reasoning, text, tool-call args) is
-# written to stdout VERBATIM. No regex cleaning, no cross-chunk dedup, no
-# concatenation heuristics. If the model emits weird spacing, that's the
-# model's output — surfacing it unmodified is the contract show_full honors.
-# Rich's Console.out is avoided for per-token streaming because it still
-# measures/pads/wraps each call and can inject spurious newlines between
-# small tokens; sys.stdout.write is the only truly transparent path.
-
-
+# we wait for the model. Pure ASCII so it renders the same on any
+# terminal (Windows cmd, PowerShell, iTerm, Terminal.app, tmux, etc).
+#
 _REASONING_NEWLINE_RUN_RE = re.compile(r"\n{3,}")
 
 
@@ -216,6 +210,10 @@ async def run_single_turn(
     show_full: bool = True,
     reasoning_char_budget: int = 0,
 ) -> TurnResult:
+    # Easter Egg: Add demon emoji if model is uncensored/nsfw
+    if any(k in request.model.lower() for k in ["uncensored", "uncensor", "abliterated", "obliterated", "nsfw"]) and "😈" not in request.model:
+        request.model += " 😈"
+
     result = TurnResult()
     render_state = StreamRenderState()
     _tool_call_header_shown: set[int] = set()
@@ -410,21 +408,40 @@ async def run_tool_loop(
         )
 
         # ── SoT Step 5: Inference ──
+        # While waiting for the first chunk (or, in non-stream mode, the
+        # whole completion), show the walking-robot spinner so the user
+        # knows the request is in flight. Auto-degrades on non-TTY
+        # consoles (logs, redirects) thanks to Rich.
+        # Label is baked into the spinner frames (see SPINNERS["sot_robot"]
+        # above), so the Status `text` argument is intentionally empty —
+        # otherwise Rich would render the text AFTER the robot and break
+        # the "Processing prompt: [robot]" order the user wants.
+        prompt_status = console.status(
+            "",
+            spinner="sot_robot",
+            spinner_style="bold bright_cyan",
+        )
         if round_request.stream:
-            completion = await _run_streaming_round(
-                adapter,
-                round_request,
-                console,
-                show_thinking=runtime.config.tools.show_thinking,
-                show_full=runtime.config.tools.show_full,
-                reasoning_char_budget=_effective_reasoning_char_budget(
-                    request,
-                    runtime.config.tools.reasoning_char_budget,
-                    runtime.config.tools.delegated_reasoning_char_budget,
-                ),
-            )
+            prompt_status.start()
+            try:
+                completion = await _run_streaming_round(
+                    adapter,
+                    round_request,
+                    console,
+                    show_thinking=runtime.config.tools.show_thinking,
+                    show_full=runtime.config.tools.show_full,
+                    reasoning_char_budget=_effective_reasoning_char_budget(
+                        request,
+                        runtime.config.tools.reasoning_char_budget,
+                        runtime.config.tools.delegated_reasoning_char_budget,
+                    ),
+                    prompt_status=prompt_status,
+                )
+            finally:
+                prompt_status.stop()
         else:
-            completion = await adapter.complete_turn(round_request)
+            with prompt_status:
+                completion = await adapter.complete_turn(round_request)
 
         # ── SoT Step 6: Clean — save assistant to permanent history (no SoT) ──
         assistant_message = dict(completion.assistant_message)
@@ -1132,6 +1149,7 @@ async def _run_streaming_round(
     show_thinking: bool = True,
     show_full: bool = True,
     reasoning_char_budget: int = 0,
+    prompt_status: Any = None,
 ):
     text_parts: list[str] = []
     reasoning_parts: list[str] = []
@@ -1146,6 +1164,20 @@ async def _run_streaming_round(
     stream = adapter.stream_turn(request)
     try:
         async for event in stream:
+            # Tear down the loading spinner the instant any real content
+            # starts arriving — reasoning, text, or a tool call. Doing
+            # this BEFORE the per-event render path is critical: the
+            # render path writes raw bytes to stdout and would collide
+            # with Rich's Live cursor management if the spinner were
+            # still drawing.
+            if prompt_status is not None and event.type in {
+                "reasoning_delta",
+                "text_delta",
+                "tool_call",
+            }:
+                prompt_status.stop()
+                prompt_status = None
+
             if event.type == "reasoning_delta":
                 text = str(event.payload.get("text", ""))
                 details = event.payload.get("details") or []

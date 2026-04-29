@@ -1774,6 +1774,8 @@ async def _run_prompt(
     line_session = f"[bold white]session[/bold white]  {record.id}"
     line_route = f"[bold white]route[/bold white]    {provider_base_url}" if provider_base_url else ""
     line_model = f"[bold white]model[/bold white]    {active_model}"
+    if any(k in active_model.lower() for k in ["uncensored", "uncensor", "abliterated", "obliterated", "nsfw"]) and "😎" not in active_model:
+        line_model += " 😎"
     line_time = f"[bold white]started[/bold white]  {start_now_str}"
     line_stats = f"[bold white]specs[/bold white]    {stats_line}" if stats_line else ""
     line_caps = f"[bold white]caps[/bold white]     {caps_line} | tools={'off' if no_tools else 'on'}" if caps_line else f"[bold white]tools[/bold white]    {'off' if no_tools else 'on'}"
