@@ -72,6 +72,7 @@ class ToolConfig:
     search_timeout_seconds: int = 30
     reasoning_char_budget: int = 8000
     delegated_reasoning_char_budget: int = 4000
+    compression_reasoning_trunc_chars: int = 240
 
 
 @dataclass
@@ -253,6 +254,10 @@ def _parse_app_config(raw: dict[str, Any], keys_raw: dict[str, Any] | None = Non
             delegated_reasoning_char_budget=_parse_non_negative_int(
                 tools_raw.get("delegated_reasoning_char_budget", 4000),
                 "tools.delegated_reasoning_char_budget",
+            ),
+            compression_reasoning_trunc_chars=_parse_non_negative_int(
+                tools_raw.get("compression_reasoning_trunc_chars", 240),
+                "tools.compression_reasoning_trunc_chars",
             ),
         ),
         mcp_servers=mcp_servers,

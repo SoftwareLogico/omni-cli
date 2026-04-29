@@ -77,6 +77,15 @@ FALLBACK_SEARCH_TIMEOUT_SECONDS = 30
 # Set to 0 to disable the cap.
 FALLBACK_REASONING_CHAR_BUDGET = 8000
 FALLBACK_DELEGATED_REASONING_CHAR_BUDGET = 4000
+# Hard cap on characters kept from the `reasoning` field of any tool-bearing
+# assistant message in OLD (already-closed) turns when the outbound payload
+# is built. Keeps the narrative ("the model used edit_files because…") while
+# discarding the long re-explanation of the file body the model often dumps
+# inside its thinking right before emitting a mutation tool_call. Applied
+# only to assistants that have at least one tool_call AND that are not the
+# very last message in the active turn. Set to 0 to disable the cap (full
+# reasoning round-trips for every turn).
+FALLBACK_COMPRESSION_REASONING_TRUNC_CHARS = 240
 
 # ── Tools that mutate the session (trigger SoT/session refresh) ──
 SESSION_MUTATION_TOOLS = {
@@ -84,3 +93,13 @@ SESSION_MUTATION_TOOLS = {
     "attach_path_to_source",
     "detach_path_from_source",
 }
+
+# ── Tools whose tool_call ↔ tool_response pair gets fully compressed in
+# OLD turns. The pair is replaced with a single `user` message of the form
+# "SYSTEM MESSAGE: t1 <tool> path=... ..." that conveys what the assistant
+# called and the result, while the heavy `arguments` body (the full
+# `new_string` blocks for edit_files, the full `content` for write_file)
+# is permanently dropped from the wire payload. Compression only happens
+# when the corresponding tool_response reports success — failed mutations
+# are kept intact so the model can see the error context and not repeat it.
+COMPRESSED_TOOLS: frozenset[str] = frozenset({"write_file", "edit_files"})

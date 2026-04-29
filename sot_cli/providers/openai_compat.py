@@ -6,91 +6,202 @@ from typing import Any
 
 import httpx
 
+from sot_cli.constants import COMPRESSED_TOOLS
 from sot_cli.message_builder import build_user_turn_message
 from sot_cli.providers.base import ProviderCapability, ProviderCompletion, ProviderEvent, ProviderRequest
 
 
 # ─── Outbound message sanitizer ──────────────────────────────────────────
 #
-# Tool names whose ``arguments`` payload becomes REDUNDANT once the file
-# is in the SoT: re-sending the full file body (or the full list of
-# new_string blocks) on every subsequent request is pure token waste —
-# the post-mutation file content is already in the next turn's
-# '=== SOURCE OF TRUTH ===' block.
+# This module is the LAST transformation before the chat payload reaches
+# the network. It enforces three independent invariants:
 #
-# The sanitizer keeps the tool_call envelope intact (so the model still
-# sees "I called write_file on /x" in its history AND the OpenAI-strict
-# tool_call ↔ tool message pairing invariant is preserved) but trims the
-# heavy fields out of the arguments JSON. See _trim_mutation_arguments.
-_MUTATION_TOOLS_FOR_ARGS_TRIMMING: frozenset[str] = frozenset({
-    "edit_files",
-    "write_file",
-})
+#   1. Schema strictness — drop empty husks that strict providers reject.
+#   2. Tool-call ↔ tool-message single-use pairing (orphan/duplicate cleanup).
+#   3. SoT-aware compression of OLD turns:
+#        * Reasoning of tool-bearing assistants is truncated to N chars.
+#        * Successful (write_file | edit_files) pairs are replaced by a
+#          single `user`-role "SYSTEM MESSAGE: ..." log line that names
+#          the tool, the path(s), the result metadata, and a short
+#          reasoning excerpt — and DROPS the heavy `arguments` body
+#          (the full new_string blocks / file content) which is already
+#          reflected in the next turn's '=== SOURCE OF TRUTH ===' block.
+#
+# Compression is applied ONLY to messages BEFORE the index of the latest
+# user message in chat_history (i.e. closed turns). The active turn in
+# flight is never touched — its tool_call and tool_response messages
+# round-trip in full so the model can see exactly what it just did.
+#
+# The transformation is a pure function of the input (deterministic):
+# the same message processed twice produces the same bytes on the wire,
+# which is what makes prefix-matching prompt caches hit across rounds and
+# turns.
 
-# Inline marker the model sees in trimmed arguments. Short, self-explanatory,
-# and unique enough to be searchable in transcripts when debugging.
-_ELIDED_MARKER = "<elided: in SoT>"
 
-# Generic fallback when JSON parsing of a mutation tool's arguments fails
-# (rare — would imply the model emitted malformed JSON in arguments). Stays
-# valid JSON so we never break a downstream parser.
-_GENERIC_ELIDED_ARGS = '{"_summary": "args elided; result is in SoT"}'
+_SYSTEM_MESSAGE_PREFIX = "SYSTEM MESSAGE: "
+_TRUNC_MARKER = "...[truncated]"
 
 
-def _trim_mutation_arguments(tool_name: str, raw_arguments: str) -> str:
-    """Return a token-light replacement for a mutation tool_call's arguments.
+def _truncate_reasoning(text: str, char_cap: int) -> str:
+    """Return ``text`` clipped to ``char_cap`` chars + a [truncated] marker.
 
-    Strategy (Shape A2):
-      * Parse the original arguments JSON.
-      * Keep tiny metadata fields the model actually wants to remember
-        (paths) so it knows WHICH file(s) it touched on this round.
-      * Replace heavy redundant fields (file content, edit_string lists)
-        with :data:`_ELIDED_MARKER` — the model can read the post-mutation
-        result from the SoT block on the next turn.
-      * Re-serialize.
-
-    On any failure (non-JSON args, unexpected shape) fall back to
-    :data:`_GENERIC_ELIDED_ARGS` rather than the verbatim original — the
-    point of this whole function is to make sure the heavy content does
-    NOT round-trip even when something goes wrong with the trim.
+    ``char_cap == 0`` disables the cap and returns the input verbatim.
+    Strings already within the budget are returned unchanged so the
+    transformation is idempotent for short reasoning blocks.
     """
+    if char_cap <= 0 or not isinstance(text, str):
+        return text
+    if len(text) <= char_cap:
+        return text
+    return text[:char_cap] + _TRUNC_MARKER
+
+
+def _truncate_reasoning_details(details: list[Any], char_cap: int) -> list[Any]:
+    """Truncate the merged ``text`` of consecutive ``reasoning.text`` entries.
+
+    Mirrors the cap applied to plain ``reasoning`` strings: clamps the
+    cumulative text characters across mergeable entries to ``char_cap``
+    while leaving non-text entries (encrypted blobs, summaries) atomic.
+    Order and entry shapes are preserved; only the ``text`` field of
+    text-class entries gets shortened.
+    """
+    if char_cap <= 0 or not isinstance(details, list):
+        return details
+
+    remaining = char_cap
+    truncated: list[Any] = []
+    capped = False
+    for entry in details:
+        if not isinstance(entry, dict):
+            truncated.append(entry)
+            continue
+        if entry.get("type") != "reasoning.text":
+            truncated.append(entry)
+            continue
+        text = entry.get("text")
+        if not isinstance(text, str):
+            truncated.append(entry)
+            continue
+        if capped:
+            new_entry = dict(entry)
+            new_entry["text"] = ""
+            truncated.append(new_entry)
+            continue
+        if len(text) <= remaining:
+            truncated.append(entry)
+            remaining -= len(text)
+            continue
+        new_entry = dict(entry)
+        new_entry["text"] = text[:remaining] + _TRUNC_MARKER
+        truncated.append(new_entry)
+        remaining = 0
+        capped = True
+
+    return truncated
+
+
+def _excerpt_for_system_log(text: str, char_cap: int) -> str:
+    """Return a compact reasoning excerpt embedded in a SYSTEM MESSAGE line.
+
+    Differs from :func:`_truncate_reasoning` only in defaulting to a
+    minimum length when the cap is disabled (``char_cap == 0``) — the
+    SYSTEM MESSAGE line is meant to be a one-line log, so we always trim
+    long reasonings to a sane bound for that specific embed.
+    """
+    if not isinstance(text, str) or not text:
+        return ""
+    effective_cap = char_cap if char_cap > 0 else 240
+    cleaned = " ".join(text.split())
+    if len(cleaned) <= effective_cap:
+        return cleaned
+    return cleaned[:effective_cap] + _TRUNC_MARKER
+
+
+def _format_compressed_tool_call(tool_call: dict[str, Any], tool_response: dict[str, Any], reasoning_excerpt: str) -> str:
+    """Build the per-tool fragment of a SYSTEM MESSAGE line.
+
+    Produces a compact ``key=value`` rendering with all paths, line
+    counts, and byte counts intact (the model will reference these on
+    later turns), while the reasoning is reduced to a one-line excerpt.
+
+    Only ``write_file`` and ``edit_files`` are formatted here — they are
+    the only tools whose pair gets compressed. Both schemas are parsed
+    defensively: a malformed ``arguments`` JSON falls back to a minimal
+    rendering so the SYSTEM MESSAGE line is always emittable.
+    """
+    function = tool_call.get("function") if isinstance(tool_call.get("function"), dict) else {}
+    name = function.get("name", "") if isinstance(function.get("name"), str) else ""
+    raw_args = function.get("arguments", "")
     try:
-        parsed = json.loads(raw_arguments) if isinstance(raw_arguments, str) else None
+        parsed_args = json.loads(raw_args) if isinstance(raw_args, str) and raw_args else {}
     except (json.JSONDecodeError, TypeError, ValueError):
-        return _GENERIC_ELIDED_ARGS
+        parsed_args = {}
+    if not isinstance(parsed_args, dict):
+        parsed_args = {}
 
-    if not isinstance(parsed, dict):
-        return _GENERIC_ELIDED_ARGS
+    response_content = tool_response.get("content") if isinstance(tool_response, dict) else ""
+    response_summary = response_content if isinstance(response_content, str) else ""
+    # Collapse newlines so the SYSTEM MESSAGE line stays single-line.
+    response_summary = " ".join(response_summary.split())
+    # Cap the response excerpt so a verbose tool result doesn't blow up
+    # the wire size (the structured fields below already carry the
+    # important metadata; the literal response is included as a hint).
+    if len(response_summary) > 200:
+        response_summary = response_summary[:200] + _TRUNC_MARKER
 
-    if tool_name == "write_file":
-        # Schema: {"path": str, "content": str}. Keep path; elide content.
-        trimmed: dict[str, Any] = {}
-        if "path" in parsed:
-            trimmed["path"] = parsed["path"]
-        if "content" in parsed:
-            trimmed["content"] = _ELIDED_MARKER
-        return json.dumps(trimmed, ensure_ascii=False)
+    parts: list[str] = [name or "?"]
 
-    if tool_name == "edit_files":
-        # Schema: {"files": [{"path": str, "edits": [...]}, ...]}. Keep
-        # the list of paths so the model remembers which files it touched;
-        # elide the edits payload of each entry.
-        files = parsed.get("files")
-        if not isinstance(files, list):
-            return _GENERIC_ELIDED_ARGS
-        trimmed_files: list[dict[str, Any]] = []
-        for entry in files:
-            if not isinstance(entry, dict):
-                continue
-            trimmed_entry: dict[str, Any] = {}
-            if "path" in entry:
-                trimmed_entry["path"] = entry["path"]
-            if "edits" in entry:
-                trimmed_entry["edits"] = _ELIDED_MARKER
-            trimmed_files.append(trimmed_entry)
-        return json.dumps({"files": trimmed_files}, ensure_ascii=False)
+    if name == "write_file":
+        path = parsed_args.get("path") if isinstance(parsed_args.get("path"), str) else "?"
+        parts.append(f"path={path}")
+        parts.append("sot=tracked_unless_detached")
+    elif name == "edit_files":
+        files = parsed_args.get("files")
+        paths: list[str] = []
+        edit_count = 0
+        if isinstance(files, list):
+            for entry in files:
+                if not isinstance(entry, dict):
+                    continue
+                p = entry.get("path")
+                if isinstance(p, str):
+                    paths.append(p)
+                edits = entry.get("edits")
+                if isinstance(edits, list):
+                    edit_count += len(edits)
+        if paths:
+            parts.append(f"paths={','.join(paths)}")
+        if edit_count:
+            parts.append(f"edits={edit_count}")
+        parts.append("sot=tracked_unless_detached")
+    else:
+        # Defensive: COMPRESSED_TOOLS would normally gate this; if a new
+        # tool is added there without a formatter, fall back to a generic
+        # rendering rather than crash.
+        for key in ("path", "paths"):
+            if key in parsed_args:
+                parts.append(f"{key}={parsed_args[key]}")
 
-    return _GENERIC_ELIDED_ARGS
+    if response_summary:
+        parts.append(f"result=\"{response_summary}\"")
+    if reasoning_excerpt:
+        parts.append(f"reasoning=\"{reasoning_excerpt}\"")
+
+    return " ".join(parts)
+
+
+def _build_system_message_user(fragments: list[str]) -> dict[str, Any]:
+    """Build the `user`-role SYSTEM MESSAGE container for one or more
+    compressed tool fragments emitted in the same assistant round.
+
+    Multi-tool rounds are joined with a `` | `` separator so the line
+    stays parseable and single-line. The `SYSTEM MESSAGE:` prefix is in
+    uppercase intentionally — the system-prompt rule that explains this
+    format keys on that exact prefix.
+    """
+    numbered = [f"t{i + 1} {frag}" for i, frag in enumerate(fragments)]
+    body = " | ".join(numbered)
+    return {"role": "user", "content": _SYSTEM_MESSAGE_PREFIX + body}
 
 
 def _is_effectively_empty_text(value: Any) -> bool:
@@ -110,85 +221,147 @@ def _is_effectively_empty_text(value: Any) -> bool:
     return False
 
 
-def _sanitize_messages_for_provider(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Strict-API firewall + SoT-aware mutation-args trimming before send.
+def _is_successful_tool_response(content: Any) -> bool:
+    """Heuristic: does this tool_response report a successful mutation?
 
-    Three independent responsibilities, all required before the chat
-    reaches ANY OpenAI-compatible provider:
+    The runtime's ``_build_tool_result_summary`` uses an ``"error: ..."``
+    prefix for every failure path (see ``query.py``). We refuse to
+    compress a mutation when its response starts with that marker so
+    the model retains the verbatim error context and does not silently
+    repeat the failing call. Non-string content is treated as
+    "unknown shape, do not compress" to stay on the safe side.
+    """
+    if not isinstance(content, str):
+        return False
+    stripped = content.lstrip()
+    if not stripped:
+        return False
+    if stripped.lower().startswith("error"):
+        return False
+    return True
 
-    1. **Schema strictness — drop empty husks.** Assistant messages with
-       ``content: null`` (or whitespace-only) and no ``tool_calls`` are
-       rejected by LM Studio (HTTP 500) and by OpenAI strict (HTTP 400).
-       Drop them. Tool-role messages with ``content: null`` are coerced
-       to ``content: ""`` instead of dropped, because dropping would
-       orphan the matching ``tool_call``.
 
-    2. **Tool-call ↔ tool-message pairing invariant.** OpenAI strict
-       requires every ``tool_call`` emitted by an assistant to be
-       followed by exactly one ``tool``-role message carrying the same
-       ``tool_call_id`` (and vice-versa). Streaming interruptions,
-       Ctrl+C aborts mid-tool-execution, and message replays can leave
-       three pathological shapes in chat_history:
+def _sanitize_messages_for_provider(
+    messages: list[dict[str, Any]],
+    compression_reasoning_trunc_chars: int = 0,
+) -> list[dict[str, Any]]:
+    """Strict-API firewall + SoT-aware compression of closed turns.
 
-       * a ``tool_call`` with ``arguments: ""`` (stream cut before the
+    Pipeline (each pass operates on a shallow copy; the caller's
+    chat_history is never mutated):
+
+    1. **Schema strictness — drop empty husks.** Assistant messages
+       whose ``content`` is ``None`` (or whitespace-only) AND that have
+       no ``tool_calls`` are rejected by LM Studio (HTTP 500) and by
+       OpenAI strict (HTTP 400). They are dropped. ``tool``-role
+       messages with ``content: None`` are coerced to ``content: ""``
+       instead of dropped, because dropping would orphan their
+       matching ``tool_call``.
+
+    2. **Tool-call ↔ tool-message single-use pairing.** OpenAI strict
+       requires every assistant ``tool_call`` to be followed by exactly
+       one ``tool``-role message carrying the same ``tool_call_id``
+       (and vice-versa). Three pathological shapes are scrubbed here:
+
+       * ``tool_call`` with ``arguments: ""`` (stream cut before the
          args delta arrived);
-       * a ``tool_call`` with no matching ``tool`` response anywhere;
-       * a ``tool_call`` with the same ``id`` as a previous one whose
+       * ``tool_call`` with no matching ``tool`` response anywhere;
+       * ``tool_call`` whose ``id`` collides with a previous one whose
          response has already been consumed (duplicate from a retry).
 
-       All three trigger HTTP 5xx / 400 from strict providers. We do a
-       two-pass walk: pass 1 indexes which ``tool_call_id``s have a
-       responding ``tool`` message in this batch; pass 2 emits in
-       order, single-use-matching each ``tool_call`` against a pending
-       set so duplicates and orphans are dropped silently. Companion
-       ``tool`` messages whose call was dropped (or never existed) are
-       dropped too.
+       A two-pass walk (index then emit) single-use-matches each
+       ``tool_call`` against a pending set; orphans/duplicates and
+       their dangling companions are dropped silently.
 
-    3. **Token economy via SoT-aware args trimming.** Every surviving
-       ``tool_call`` whose function name is in
-       :data:`_MUTATION_TOOLS_FOR_ARGS_TRIMMING` has its ``arguments``
-       JSON passed through :func:`_trim_mutation_arguments`, which
-       keeps the path metadata and elides the heavy redundant fields
-       (file content, edit strings). The tool_call envelope and the
-       matching tool-response message both stay intact, so the model
-       retains a complete narrative of WHAT it did to WHICH path on
-       every turn, without the multi-thousand-token re-paste of file
-       content it can already read in the SoT block.
+    3. **Compression of CLOSED turns.** Everything STRICTLY BEFORE the
+       index of the latest ``user`` message in the chat history is a
+       closed turn — the model already received its outcome and moved
+       on. The active turn (everything from that index onward) is
+       never touched.
 
-    Notes deliberately NOT done here:
+       For closed turns the sanitizer does two things:
 
-    * ``reasoning`` and ``reasoning_details`` are LEFT ON the message.
-      OpenRouter and the Anthropic / GPT-5 reasoning class require
-      reasoning details to be round-tripped to maintain reasoning
-      continuity; stripping them blindly would silently degrade those
-      providers.
-    * Messages are shallow-copied; the caller's chat_history is never
-      mutated (the same list is reused across rounds and across turns).
+       a. Truncates the ``reasoning`` and ``reasoning_details`` of any
+          assistant message that carries ``tool_calls`` to
+          ``compression_reasoning_trunc_chars`` chars. The cap of 0
+          disables this and round-trips reasoning verbatim. The
+          ``content`` and reasoning of the FINAL assistant message of
+          a closed turn (the one the user actually saw, which has no
+          ``tool_calls``) are NEVER truncated — that text is the
+          historical record of what the model said and the user may
+          reference it later.
+
+       b. Replaces the (assistant-with-tool_call → tool-response) pair
+          with a single ``user``-role ``"SYSTEM MESSAGE: t<n> ..."``
+          line whenever the tool name is in :data:`COMPRESSED_TOOLS`
+          (currently ``write_file`` and ``edit_files``) AND the
+          tool_response indicates success AND the assistant message
+          carries exactly one ``tool_call``. Mixed rounds (a
+          compressible tool together with non-compressible tool_calls
+          in the same array) are conservatively left intact —
+          surgically removing one tool_call from a multi-call array
+          and shifting its companion response into a SYSTEM MESSAGE
+          while preserving the others would risk breaking strict
+          pairing under unusual stream-interruption shapes; in
+          practice mutation and exploration tools rarely co-occur in
+          the same round under the orchestration prompts.
+
+    The transformation is deterministic: same ``messages`` and same
+    ``compression_reasoning_trunc_chars`` produce the same output bytes.
+    That stability is what makes Anthropic / OpenAI prefix-matching
+    prompt caches hit across rounds and across turns — the prefix of
+    closed turns recompresses to identical bytes turn after turn.
+
+    ``reasoning`` and ``reasoning_details`` of the active turn are
+    deliberately LEFT ON: OpenRouter and the Anthropic / GPT-5
+    reasoning class require reasoning to be round-tripped to maintain
+    reasoning continuity; stripping it for the active turn would
+    silently degrade those providers.
     """
-    # ── Pass 1: index every tool_call_id that has a matching tool message ──
-    # We will only allow a tool_call through if the chat history contains
-    # at least one tool message responding to it. Single-use matching in
-    # pass 2 prevents one tool message from satisfying multiple duplicate
-    # tool_calls.
+    # ── Pass 1: locate the active-turn boundary ──
+    # ``last_user_idx`` is the index of the most recent ``user`` message
+    # in the chat history. Everything strictly before it is a CLOSED
+    # turn (compression candidate); everything from that index onward
+    # is the ACTIVE turn (never touched). When the chat history starts
+    # mid-stream and there is no user message at all, every position is
+    # treated as closed for safety — the original behaviour of the
+    # sanitizer is preserved in that degenerate case.
+    last_user_idx = -1
+    for i in range(len(messages) - 1, -1, -1):
+        entry = messages[i]
+        if isinstance(entry, dict) and entry.get("role") == "user":
+            last_user_idx = i
+            break
+    if last_user_idx < 0:
+        last_user_idx = len(messages)
+
+    # ── Pass 2: index every tool_call_id that has a matching tool message ──
     tool_response_ids: set[str] = set()
+    tool_response_by_id: dict[str, dict[str, Any]] = {}
     for entry in messages:
         if not isinstance(entry, dict) or entry.get("role") != "tool":
             continue
         tc_id = entry.get("tool_call_id")
         if isinstance(tc_id, str) and tc_id:
             tool_response_ids.add(tc_id)
+            tool_response_by_id.setdefault(tc_id, entry)
 
+    # ── Pass 3: emit messages, applying schema firewall + compression ──
     sanitized: list[dict[str, Any]] = []
     pending_tool_call_ids: set[str] = set()
     consumed_tool_call_ids: set[str] = set()
+    # Pre-computed for each closed-turn assistant: the tool_call IDs we
+    # are going to compress away. Their matching ``tool`` messages will
+    # be dropped from the emit pass and replaced by a SYSTEM MESSAGE.
+    drop_tool_response_ids: set[str] = set()
 
-    for original in messages:
+    for index, original in enumerate(messages):
         if not isinstance(original, dict):
-            # Malformed entry; the provider would reject it anyway. Skip
-            # silently rather than crashing the whole payload build.
+            # Malformed entry; the provider would reject it anyway.
             continue
         msg = dict(original)
         role = msg.get("role")
+        in_closed_turn = index < last_user_idx
 
         if role == "user":
             if msg.get("content") is None:
@@ -198,48 +371,97 @@ def _sanitize_messages_for_provider(messages: list[dict[str, Any]]) -> list[dict
 
         if role == "assistant":
             tool_calls = msg.get("tool_calls")
-            if isinstance(tool_calls, list) and tool_calls:
+            has_tool_calls = isinstance(tool_calls, list) and bool(tool_calls)
+
+            # Closed-turn reasoning truncation applies whenever this
+            # assistant carries tool_calls — it is the "intermediate"
+            # assistant whose reasoning often duplicates the body of
+            # the tool_call about to fire.
+            if in_closed_turn and has_tool_calls:
+                if isinstance(msg.get("reasoning"), str):
+                    msg["reasoning"] = _truncate_reasoning(
+                        msg["reasoning"], compression_reasoning_trunc_chars
+                    )
+                if isinstance(msg.get("reasoning_details"), list):
+                    msg["reasoning_details"] = _truncate_reasoning_details(
+                        msg["reasoning_details"], compression_reasoning_trunc_chars
+                    )
+
+            if has_tool_calls:
                 surviving_calls: list[dict[str, Any]] = []
+                # Decide whether this assistant qualifies for full pair
+                # compression (single tool_call, in COMPRESSED_TOOLS, in
+                # a closed turn, with a successful tool_response).
+                compressible_tool_call: dict[str, Any] | None = None
+                if in_closed_turn and len(tool_calls) == 1:
+                    only_tc = tool_calls[0] if isinstance(tool_calls[0], dict) else None
+                    if isinstance(only_tc, dict):
+                        only_func = only_tc.get("function") if isinstance(only_tc.get("function"), dict) else None
+                        if isinstance(only_func, dict):
+                            only_name = only_func.get("name", "") if isinstance(only_func.get("name"), str) else ""
+                            only_id = only_tc.get("id") if isinstance(only_tc.get("id"), str) else ""
+                            only_args = only_func.get("arguments", "")
+                            if (
+                                only_name in COMPRESSED_TOOLS
+                                and only_id
+                                and isinstance(only_args, str)
+                                and only_args
+                                and only_id in tool_response_ids
+                                and _is_successful_tool_response(
+                                    tool_response_by_id.get(only_id, {}).get("content")
+                                )
+                            ):
+                                compressible_tool_call = only_tc
+
+                if compressible_tool_call is not None:
+                    # Build the SYSTEM MESSAGE replacement and emit it
+                    # in place of the assistant message. The matching
+                    # tool_response will be dropped when we encounter
+                    # it later in the iteration.
+                    response_msg = tool_response_by_id.get(
+                        compressible_tool_call.get("id", ""), {}
+                    )
+                    reasoning_excerpt = _excerpt_for_system_log(
+                        msg.get("reasoning") if isinstance(msg.get("reasoning"), str) else "",
+                        compression_reasoning_trunc_chars,
+                    )
+                    fragment = _format_compressed_tool_call(
+                        compressible_tool_call, response_msg, reasoning_excerpt
+                    )
+                    sanitized.append(_build_system_message_user([fragment]))
+                    drop_tool_response_ids.add(compressible_tool_call.get("id", ""))
+                    # The single tool_call is consumed; do NOT add the
+                    # original assistant message at all (its reasoning
+                    # has been folded into the SYSTEM MESSAGE excerpt).
+                    continue
+
                 for tc in tool_calls:
                     if not isinstance(tc, dict):
                         continue
                     tc_id = tc.get("id")
                     if not isinstance(tc_id, str) or not tc_id:
-                        # Tool_call without a usable id — provider would
-                        # reject and we cannot pair it with a response.
                         continue
                     func = tc.get("function") if isinstance(tc.get("function"), dict) else None
                     if not isinstance(func, dict):
                         continue
-                    name = func.get("name", "") if isinstance(func.get("name"), str) else ""
                     args = func.get("arguments", "")
                     if not isinstance(args, str) or args == "":
-                        # Stream cut before args delta arrived. Drop —
-                        # provider rejects "" args.
+                        # Stream cut before args delta arrived; provider
+                        # rejects empty args. Drop.
                         continue
                     if tc_id not in tool_response_ids:
                         # Orphan: no tool message in this batch will pair
                         # with us. Drop to preserve the strict invariant.
                         continue
                     if tc_id in consumed_tool_call_ids:
-                        # Duplicate of a previous tool_call whose response
-                        # has already been consumed; the matching tool
-                        # message was single-use-paired with the earlier
-                        # call. Drop the duplicate.
+                        # Duplicate of a previous tool_call whose
+                        # response was already consumed. Drop.
                         continue
                     if tc_id in pending_tool_call_ids:
-                        # Two tool_calls in a row with the same id and no
-                        # tool message between them. Drop the second.
+                        # Two tool_calls in a row with the same id and
+                        # no tool message between them. Drop the second.
                         continue
-
-                    if name in _MUTATION_TOOLS_FOR_ARGS_TRIMMING:
-                        new_tc = dict(tc)
-                        new_func = dict(func)
-                        new_func["arguments"] = _trim_mutation_arguments(name, args)
-                        new_tc["function"] = new_func
-                        surviving_calls.append(new_tc)
-                    else:
-                        surviving_calls.append(tc)
+                    surviving_calls.append(tc)
                     pending_tool_call_ids.add(tc_id)
 
                 if surviving_calls:
@@ -248,8 +470,8 @@ def _sanitize_messages_for_provider(messages: list[dict[str, Any]]) -> list[dict
                     msg.pop("tool_calls", None)
 
             content_is_empty = _is_effectively_empty_text(msg.get("content"))
-            has_tool_calls = bool(msg.get("tool_calls"))
-            if content_is_empty and not has_tool_calls:
+            has_surviving_tool_calls = bool(msg.get("tool_calls"))
+            if content_is_empty and not has_surviving_tool_calls:
                 continue
 
             sanitized.append(msg)
@@ -259,6 +481,11 @@ def _sanitize_messages_for_provider(messages: list[dict[str, Any]]) -> list[dict
             tc_id = msg.get("tool_call_id")
             if not isinstance(tc_id, str) or not tc_id:
                 # Malformed tool message without an id — cannot pair.
+                continue
+            if tc_id in drop_tool_response_ids:
+                # Companion of a tool_call we just compressed into a
+                # SYSTEM MESSAGE. Drop silently — the SYSTEM MESSAGE
+                # already conveys what this response carried.
                 continue
             if tc_id not in pending_tool_call_ids:
                 # Either no preceding tool_call (orphan) or the call was
@@ -687,14 +914,20 @@ def build_chat_completions_payload(request: ProviderRequest, resolved_model: str
             ),
         },
     ]
-    # Strict-API firewall + SoT-aware token-economy pruning. See
+    # Strict-API firewall + SoT-aware compression of closed turns. See
     # _sanitize_messages_for_provider's docstring for the full rationale;
     # in short: drops malformed null-content shapes that crash strict
-    # validators (LM Studio HTTP 500, OpenAI HTTP 400) AND strips
-    # redundant edit_files / write_file tool_call args (and their tool
-    # responses) since the post-mutation file content is already in the
-    # next turn's SoT block.
-    messages = _sanitize_messages_for_provider(raw_messages)
+    # validators (LM Studio HTTP 500, OpenAI HTTP 400), enforces strict
+    # tool_call ↔ tool-response pairing, truncates the reasoning of
+    # tool-bearing assistants in closed turns, and replaces successful
+    # write_file/edit_files (assistant + tool_response) pairs with a
+    # compact "SYSTEM MESSAGE: ..." log line. The active turn is never
+    # touched. Compression stays deterministic so prefix-matching
+    # prompt caches keep hitting across rounds and turns.
+    messages = _sanitize_messages_for_provider(
+        raw_messages,
+        compression_reasoning_trunc_chars=request.compression_reasoning_trunc_chars,
+    )
 
     is_openai = request.provider_name == "openai"
     is_openrouter = request.provider_name == "openrouter"

@@ -63,4 +63,5 @@ def prepare_turn_request(
         enable_tools=enable_tools,
         disable_delegation=disable_delegation,
         reasoning_effort=reasoning_effort,
+        compression_reasoning_trunc_chars=config.tools.compression_reasoning_trunc_chars,
     )

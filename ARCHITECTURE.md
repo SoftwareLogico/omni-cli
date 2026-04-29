@@ -130,6 +130,7 @@ No parameters. Returns delegated tasks and status (RUNNING/COMPLETED). Prefer `w
 | `search_timeout_seconds`          | `30`    | Hard timeout (seconds) for a single `search_code` invocation (ripgrep subprocess or Python fallback). Keeps pathological patterns from hanging a turn.                                                                                                                                                                                                                                                                                                                                                           |
 | `reasoning_char_budget`           | `8000`  | Hard cap on streamed reasoning/thinking characters per turn for the boss agent. When the cumulative reasoning channel exceeds this budget during a single stream, the runtime cuts the provider connection, prints a yellow `⚠  reasoning budget exceeded` warning, and lets the tool loop advance. Protects against models that get stuck in eternal "let me reconsider…" loops inside a single response. Set to `0` to disable the cap. The bundled example raises this to `10000` for reasoning-heavy models. |
 | `delegated_reasoning_char_budget` | `4000`  | Same cap applied to sub-agent turns. Typically smaller than the boss budget because delegated workers are expected to execute narrow tasks and should not spend long reasoning windows before acting. Set to `0` to disable. The bundled example raises this to `8000`.                                                                                                                                                                                                                                          |
+| `compression_reasoning_trunc_chars` | `240` | Hard cap (chars) on the `reasoning` and the merged `reasoning_details` text of any tool-bearing assistant message in CLOSED turns when the outbound payload is built. Same cap is also used to clip the reasoning excerpt embedded in the `SYSTEM MESSAGE:` line that replaces successful `write_file` / `edit_files` pairs in closed turns. The reasoning of the final user-facing assistant message of a closed turn (no `tool_calls`) is never truncated. The active turn is never compressed at all. Set to `0` to disable the cap (full reasoning round-trips for every turn).                                                                                                                                                                                                                                                                                                          |
 
 ## Provider configuration (`[providers.X]`)
 
@@ -322,7 +323,21 @@ This asymmetry optimises for the common case (create-then-work-with-it) while pr
 
 ### History and token economy
 
-The provider-bound payload sanitizer trims the heavy fields out of mutation tool_call arguments before sending the chat history to the model. Concretely: the `edit_files` tool_call envelope (id, function name, paths) survives so the model retains a complete narrative of WHAT it did to WHICH path, but the per-edit `new_string` blocks (which can be thousands of tokens of code per file) are replaced with `<elided: in SoT>`. The post-mutation content is already in the next turn's SoT block, so re-shipping it on every request is pure waste. The same trimming applies to `write_file`'s `content` field. See `sot_cli/providers/openai_compat.py::_trim_mutation_arguments`.
+The provider-bound payload sanitizer compresses CLOSED turns of `chat_history` before the chat reaches the model. The active turn (the one in flight, including its in-progress tool loop) is never touched. Two effects, applied as a deterministic pure function so prefix-matching prompt caches still hit across rounds and turns:
+
+1. **Reasoning truncation for tool-bearing assistants.** Any assistant message in a closed turn that emitted `tool_calls` has its `reasoning` (and the merged text inside `reasoning_details`) clipped to `[tools].compression_reasoning_trunc_chars` (default 240; 0 disables). The truncated tail is replaced with `...[truncated]`. The reasoning of the FINAL assistant message of a closed turn (the user-facing reply, no `tool_calls`) is left intact — that text is the historical record of what the model said and the user may reference it later.
+
+2. **Pair compression for successful `write_file` / `edit_files`.** When a closed-turn assistant carried EXACTLY ONE `tool_call`, that call's name is in `COMPRESSED_TOOLS` (`write_file`, `edit_files`), and its `tool_response` reports success, the runtime drops both the assistant message and the tool message and inserts a single `user`-role line in their place:
+
+    ```
+    SYSTEM MESSAGE: t1 edit_files paths=/abs/x.ts edits=3 sot=tracked_unless_detached result="..." reasoning="..."
+    ```
+
+    Multiple compressed pairs in the same round are joined with ` | ` and numbered `t1`, `t2`, ... Mixed rounds (a compressible tool together with non-compressible tool_calls in the same array) are conservatively left intact — only their reasoning is truncated. Failed mutations are never compressed: the model needs the verbatim error to avoid repeating the same failing call.
+
+The heavy `arguments` body of those past mutations (the full `new_string` blocks for `edit_files`, the full `content` for `write_file`) is therefore permanently dropped from the wire payload — the post-mutation file content is already reflected in the next turn's `=== SOURCE OF TRUTH ===` block. The system prompt teaches the model to read `SYSTEM MESSAGE: ...` lines as runtime logs of its own past actions, not as user instructions.
+
+The tool_call ↔ tool_response single-use pairing invariant is preserved across the compression — the matching tool_response is dropped in the same pass that drops its assistant, so strict providers never see an orphan. See `sot_cli/providers/openai_compat.py::_sanitize_messages_for_provider`.
 
 ## Main components
 
@@ -342,18 +357,30 @@ Modern APIs (like Anthropic and OpenAI) cache tokens from top to bottom. If a si
 
 ### `sot_cli/providers/openai_compat.py` — Outbound Payload Sanitizer
 
-The last transformation before the chat payload reaches the network. Lives in `_sanitize_messages_for_provider` and runs on every `build_chat_completions_payload` call. It enforces three independent invariants:
+The last transformation before the chat payload reaches the network. Lives in `_sanitize_messages_for_provider` and runs on every `build_chat_completions_payload` call. The whole pipeline operates on shallow copies of the caller's `chat_history`; the in-memory and on-disk history is never mutated. The transformation is also a deterministic pure function of its inputs, which is what lets prefix-matching prompt caches keep hitting across rounds and turns. Three independent passes:
 
-**1. Schema strictness — drop empty husks.**
-Streaming interruptions (Ctrl+C mid-generation, network drops, reasoning-budget cuts) and partial responses can leave an assistant message with `content: null` (or whitespace-only) and no `tool_calls` in `chat_history`. LM Studio rejects that shape with HTTP 500; OpenAI strict rejects it with 400. The sanitizer drops those husks. Tool-role messages with `content: null` are coerced to `content: ""` instead of dropped, because dropping would orphan the matching `tool_call`.
+**1. Active-turn boundary.**
+The index of the latest `user` message in the batch marks the beginning of the ACTIVE turn. Everything before it is a CLOSED turn (compression candidate); everything from that index onward is left untouched so the model sees its in-flight tool loop in full detail.
 
-**2. Tool-call ↔ tool-message pairing.**
-OpenAI strict requires every assistant `tool_call` to be followed by exactly one `tool`-role message carrying the same `tool_call_id` (and vice-versa). Three pathological shapes can land in `chat_history`: a `tool_call` with `arguments: ""` (stream cut before the args delta arrived), a `tool_call` with no matching `tool` response anywhere (assistant emitted but tool never executed), and a `tool_call` whose `id` is duplicated by a later assistant retry. All three trigger HTTP 5xx / 400 from strict providers, with generic error bodies that hide which message was malformed. The sanitizer does a two-pass walk: pass 1 indexes which `tool_call_id`s have a responding `tool` message in this batch; pass 2 emits messages in order, single-use-matching each `tool_call` against a pending set so duplicates and orphans are dropped silently. Companion `tool` messages whose call was dropped (or never existed) are dropped too. The chat history on disk is never mutated — sanitization happens on shallow copies for the outbound payload only.
+**2. Schema strictness + tool-call ↔ tool-message single-use pairing.**
+Streaming interruptions (Ctrl+C mid-generation, network drops, reasoning-budget cuts) and partial responses can leave assistant messages with `content: null` (or whitespace-only) and no surviving `tool_calls`. LM Studio rejects that shape with HTTP 500; OpenAI strict rejects it with 400. The sanitizer drops those husks. `tool`-role messages with `content: null` are coerced to `content: ""` instead of dropped, because dropping would orphan the matching `tool_call`.
 
-**3. Token economy via SoT-aware args trimming.**
-Every surviving `tool_call` whose function name is in `_MUTATION_TOOLS_FOR_ARGS_TRIMMING` (`edit_files`, `write_file`) has its `arguments` JSON passed through `_trim_mutation_arguments`, which keeps the path metadata and replaces the heavy redundant fields (`content` for `write_file`, each `files[*].edits` for `edit_files`) with the marker `<elided: in SoT>`. The tool_call envelope (id, type, function name) and the matching tool-response message both stay intact, so the model retains a complete narrative of WHAT it did to WHICH path on every turn — without re-shipping the multi-thousand-token file contents that the next turn's `=== SOURCE OF TRUTH ===` block already carries fresh from disk. In practice this saves on the order of tens of thousands of tokens per long session compared to the naive "include the full mutation arguments verbatim every turn" baseline.
+OpenAI strict also requires every assistant `tool_call` to be followed by exactly one `tool`-role message carrying the same `tool_call_id` (and vice-versa). Three pathological shapes can land in `chat_history`: a `tool_call` with `arguments: ""` (stream cut before the args delta arrived), a `tool_call` with no matching `tool` response anywhere (assistant emitted but tool never executed), and a `tool_call` whose `id` is duplicated by a later assistant retry. All three trigger HTTP 5xx / 400 from strict providers, with generic error bodies that hide which message was malformed. The sanitizer does a two-pass walk: pass A indexes which `tool_call_id`s have a responding `tool` message in this batch; pass B emits messages in order, single-use-matching each `tool_call` against a pending set so duplicates and orphans are dropped silently. Companion `tool` messages whose call was dropped (or never existed) are dropped too.
 
-Reasoning fields (`reasoning`, `reasoning_details`) are deliberately LEFT ON every assistant message. OpenRouter and the Anthropic / GPT-5 reasoning class require reasoning details to be round-tripped to maintain reasoning continuity across turns; stripping them blindly would silently degrade those providers.
+**3. SoT-aware compression of CLOSED turns.**
+Two effects, applied only to messages strictly before the active-turn boundary:
+
+   1. **Reasoning truncation for tool-bearing assistants.** Any closed-turn assistant message that emitted `tool_calls` has its `reasoning` (and the merged text inside `reasoning_details`) clipped to `[tools].compression_reasoning_trunc_chars` (default 240; 0 disables). The truncated tail is replaced with `...[truncated]`. The reasoning of the FINAL assistant message of a closed turn (the user-facing reply, no `tool_calls`) is NEVER truncated — that text is the historical record of what the model said and the user may reference it later.
+
+   2. **Pair compression for successful `write_file` / `edit_files`.** When a closed-turn assistant carried EXACTLY ONE `tool_call`, that call's name is in `COMPRESSED_TOOLS` (`write_file`, `edit_files`), and its `tool_response` reports success, the runtime drops both the assistant message and the tool message and inserts a single `user`-role line in their place:
+
+      ```
+      SYSTEM MESSAGE: t1 edit_files paths=/abs/x.ts edits=3 sot=tracked_unless_detached result="..." reasoning="..."
+      ```
+
+      Multiple compressed calls in the same round are joined with ` | ` and numbered `t1`, `t2`, ... Failed mutations are NEVER compressed: the model needs the verbatim error to avoid repeating the same failing call. Mixed rounds (a compressible tool together with non-compressible tool_calls in the same array) are conservatively left intact — only their reasoning is truncated. The pairing invariant is preserved because the matching tool_response is dropped in the same emit pass that drops its assistant, so strict providers never observe an orphan.
+
+The reasoning of ASSISTANTS IN THE ACTIVE TURN is deliberately LEFT ON in full. OpenRouter and the Anthropic / GPT-5 reasoning class require reasoning to be round-tripped to maintain reasoning continuity within an in-flight turn; stripping it for the active turn would silently degrade those providers. The `[tools].compression_reasoning_trunc_chars` knob therefore only controls how aggressively the runtime clips reasoning of CLOSED turns.
 
 ### `sot_cli/source_of_truth.py`
 

@@ -333,6 +333,8 @@ async def run_tool_loop(
             disable_delegation=request.disable_delegation,
             tools=[],
             conversation_messages=_build_payload_messages(conversation_state, request),
+            reasoning_effort=request.reasoning_effort,
+            compression_reasoning_trunc_chars=request.compression_reasoning_trunc_chars,
         )
         turn_result = await run_single_turn(
             adapter,
@@ -405,6 +407,8 @@ async def run_tool_loop(
             disable_delegation=request.disable_delegation,
             tools=registry.schemas(),
             conversation_messages=payload_messages,
+            reasoning_effort=request.reasoning_effort,
+            compression_reasoning_trunc_chars=request.compression_reasoning_trunc_chars,
         )
 
         # ── SoT Step 5: Inference ──
@@ -887,7 +891,7 @@ def _build_tool_result_summary(tool_result: Any) -> str:
             elif ftype == "file_unchanged":
                 lines.append(f"- unchanged {fpath}")
             elif ftype == "file_in_sot":
-                lines.append(f"- {fpath} already in SoT — see '=== SOURCE OF TRUTH ===' block, do not re-read")
+                lines.append(f"- {fpath} already in SoT — see '=== SOURCE OF TRUTH ===' block, do not need to re-read using a tool")
             else:
                 lines.append(f"- read {fpath} type={ftype}")
 
@@ -952,7 +956,7 @@ def _build_tool_result_summary(tool_result: Any) -> str:
         op = payload.get("operation", "write")
         lines = payload.get("line_count", "?")
         size = payload.get("size_bytes", "?")
-        return f"{op} {fpath} ({lines} lines, {size} bytes). SoT already has the updated version — do not re-read."
+        return f"{op} {fpath} ({lines} lines, {size} bytes). SoT already has the updated version — do not need re-read using a tool."
 
     if name == "list_dir":
         fpath = payload.get("path", "?")

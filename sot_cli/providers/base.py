@@ -47,6 +47,12 @@ class ProviderRequest:
     # servers that reject unknown parameters with a 400. Empty / None means
     # "do not send the parameter, let the provider use its own default".
     reasoning_effort: str | None = None
+    # Hard cap on characters kept from `reasoning` of tool-bearing assistant
+    # messages in OLD turns when the outbound payload is built. Applied by
+    # the sanitizer in `openai_compat._sanitize_messages_for_provider`. 0
+    # disables the cap (full reasoning round-trips for every turn). Plumbed
+    # from `[tools].compression_reasoning_trunc_chars` in sot.toml.
+    compression_reasoning_trunc_chars: int = 0
 
 
 @dataclass

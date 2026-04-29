@@ -33,6 +33,7 @@ search_max_line_length = 1000     # per-line truncation length inside search_cod
 search_timeout_seconds = 30      # ripgrep/python-fallback timeout for a single search_code call
 reasoning_char_budget = 10000              # hard cap on streamed reasoning chars per turn (boss); 0 disables
 delegated_reasoning_char_budget = 8000    # same cap for sub-agent turns; 0 disables
+compression_reasoning_trunc_chars = 240   # hard cap (chars) on the `reasoning` of tool-bearing assistants in CLOSED turns when the outbound payload is built; 0 disables (full reasoning round-trips). Same cap is also used for the reasoning excerpt embedded in the SYSTEM MESSAGE line that replaces successful write_file/edit_files pairs in old turns.
 # Each setting above is documented in detail in ARCHITECTURE.md → "[tools] reference" section.
 
 [providers.lmstudio]
