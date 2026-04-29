@@ -441,8 +441,10 @@ async def run_tool_loop(
             result.tool_calls = []
             if executed_any_tool and not (completion.text or "").strip():
                 console.print(
-                    "[bold yellow]Warning:[/bold yellow] The model returned no final text after executing tool work. "
-                    "Review the tool output above and decide the next prompt manually."
+                    "[bold yellow]Warning:[/bold yellow] The model stopped on its own after running tools, "
+                    "without writing any reply for you. Nothing was sent. "
+                    "To continue, send another prompt manually (for example: ask it to answer based on what it just read, "
+                    "or tell it to keep going)."
                 )
             if completion.text and not round_request.stream:
                 console.print(completion.text)
