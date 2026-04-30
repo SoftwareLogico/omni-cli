@@ -36,6 +36,7 @@ from sot_cli.prompting import prepare_turn_request
 from sot_cli.query import ConversationState, _consolidate_reasoning_details, run_tool_loop
 from sot_cli.tools.shell.run_command import try_interrupt_active_foreground
 from sot_cli.runtime import AppRuntime, bootstrap_runtime
+from sot_cli.hyper_compress import hyper_compress_session
 from sot_cli.sot import is_sot_block_content, is_orchestration_rules_content, load_sot_state_from_request_json
 from sot_cli.source_of_truth import build_source_bundle, SourceBundle
 from sot_cli.providers.base import ProviderCapability
@@ -1008,6 +1009,7 @@ def _dispatch(args: Namespace) -> int:
                 return await _run_prompt(
                     runtime, getattr(args, "session_id", None), getattr(args, "title", None),
                     getattr(args, "provider", None), getattr(args, "model", None), getattr(args, "no_tools", False),
+                    hypercompress=getattr(args, "hypercompress", False),
                 )
             if args.command == "command":
                 return await _run_command_turn(
@@ -1074,6 +1076,7 @@ def _build_parser() -> ArgumentParser:
     prompt.add_argument("--provider", choices=_PROVIDER_CHOICES, default=None)
     prompt.add_argument("--model", default=None)
     prompt.add_argument("--no-tools", action="store_true", help="Plain chat without tool loop")
+    prompt.add_argument("--hypercompress", action="store_true", help="Run hyper-compression on session history before starting")
 
     chat = subparsers.add_parser("chat", help="Alias for prompt")
     chat.add_argument("session_id", nargs="?", default=None)
@@ -1081,6 +1084,7 @@ def _build_parser() -> ArgumentParser:
     chat.add_argument("--provider", choices=_PROVIDER_CHOICES, default=None)
     chat.add_argument("--model", default=None)
     chat.add_argument("--no-tools", action="store_true")
+    chat.add_argument("--hypercompress", action="store_true")
 
     cmd = subparsers.add_parser("command", help="Run a single turn (multi-agent / automation)")
     cmd.add_argument("session_id", help="Session ID to run against")
@@ -1376,6 +1380,7 @@ async def _run_prompt(
     provider_name: str | None,
     model_override: str | None,
     no_tools: bool,
+    hypercompress: bool = False,
 ) -> int:
     if session_id:
         record = runtime.sessions.load(session_id)
@@ -1579,6 +1584,18 @@ async def _run_prompt(
     loaded_sot = load_sot_state_from_request_json(session_dir)
     if loaded_sot is not None:
         session_state.sot = loaded_sot
+
+    # Hyper-compress if requested
+    if hypercompress:
+        hc_result = hyper_compress_session(session_dir, dry_run=False)
+        if "error" not in hc_result:
+            console.print(f"[green]Hyper-compressed: {hc_result['messages_before']} → {hc_result['messages_after']} messages, saved ~{hc_result['chars_saved']:,} chars[/green]")
+            # Reload compressed history into memory so subsequent turns use the clean state
+            compressed_history = _load_chat_history_from_request_jsons(session_dir)
+            if compressed_history:
+                session_state.chat_history = compressed_history
+        else:
+            console.print(f"[yellow]Hyper-compress skipped: {hc_result['error']}[/yellow]")
 
     loaded_meta = _load_last_turn_metadata(session_dir)
     if loaded_meta:

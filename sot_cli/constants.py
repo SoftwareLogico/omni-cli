@@ -92,6 +92,7 @@ SESSION_MUTATION_TOOLS = {
     "update_session",
     "attach_path_to_source",
     "detach_path_from_source",
+    "hyper_compress",
 }
 
 # ── Tools whose tool_call ↔ tool_response pair gets fully compressed in

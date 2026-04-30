@@ -382,3 +382,12 @@ FILE_IN_SOT_STUB = (
  "This file is already in your Source of Truth (SoT). Look at the '=== SOURCE OF TRUTH ==='"
  " block in your context for its full content — do not need re-read using a tool."
 )
+
+HYPER_COMPRESS_PROMPT = """Compress tool-heavy chat history to save tokens.
+
+Scans for blocks: user prompt -> tool calls -> final text reply.
+Collapses each block into: user prompt + "SYSTEM MESSAGE: used tools: ..." + final text.
+Creates a timestamped backup before modifying.
+This is a heavy compression tool, it can be use only under explicit user command.
+Even if the user ask how to reduce token usage this tool can be offered first but never use without the order."""
+
