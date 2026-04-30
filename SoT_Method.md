@@ -92,7 +92,19 @@ The model calls the `edit_files` tool. The system applies the change to the file
 ]
 ```
 
-## 4. Implementation: The Orchestrator Loop
+## 4. Prompt Caching Synergy (The Cost Saver)
+
+The SoT Method is inherently designed to exploit **Prefix-Matching Prompt Caching** (used by Anthropic, OpenAI, etc.). These caches work from top to bottom: if a single token changes, the cache breaks for everything below it.
+
+Because the SoT method places the dynamic, frequently-changing state at the _bottom_ of the payload, the top of the payload remains perfectly static:
+`[System Prompt] -> [Past Chat History] -> [Ephemeral SoT Block] -> [Latest User Prompt]`
+
+1. **Stable History:** The `chat_history` only appends new messages. When the runtime compresses past tool calls into lightweight `SYSTEM MESSAGE` logs, it only mutates the _penultimate_ turn. Everything before it remains byte-for-byte identical.
+2. **Dynamic Tail:** The `SoT Block` changes every time a file is edited. Because it sits at the end of the payload, it never invalidates the cached history above it.
+
+**Result:** Even if you have 100,000 tokens of conversation history, editing a file only costs you the tokens for the new file state. The API caches the entire history, making long, complex development sessions incredibly fast and up to 90% cheaper.
+
+## 5. Implementation: The Orchestrator Loop
 
 To implement the SoT method, your backend needs an "Orchestrator" loop that follows this logic on every turn:
 
@@ -111,7 +123,7 @@ The runtime implements additional safety and progress-guard rules around tool ex
 - Delegated sub-agents run with a tighter fail-fast budget than the main session. Current configured limits in the code are: delegated sub-agents max rounds = 8 and delegated repeated-round abort threshold = 2. The main agent uses a higher repeat-round limit (3) before aborting.
 - External MCP servers can be configured to provide additional tool schemas; MCP tools are proxied through the runtime and returned as standard tool results.
 
-## 5. Summary of Benefits
+## 6. Summary of Benefits
 
 - **Massive Token Savings:** The conversation history grows linearly and slowly, containing only dialogue. Heavy assets are loaded only once per turn.
 - **Perfect Contextual Awareness:** The model never sees outdated code or assets.

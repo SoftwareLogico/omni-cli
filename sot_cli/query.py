@@ -546,7 +546,7 @@ async def run_tool_loop(
             repeated_round_count = 0
         previous_round_fingerprint = round_fingerprint or None
 
-        if round_fingerprint and repeated_round_count >= repeat_round_limit:
+        if repeat_round_limit > 0 and round_fingerprint and repeated_round_count >= repeat_round_limit:
             message = _build_repeated_rounds_message(
                 round_observations,
                 repeat_count=repeated_round_count + 1,

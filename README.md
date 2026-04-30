@@ -1,7 +1,7 @@
 # sot-cli 🚀 Limitless Local AI Agent
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Providers](https://img.shields.io/badge/Providers-OpenRouter%20%7C%20LMStudio%20%7C%20OpenAI%20%7C%20Ollama%20%7C%20NVIDIA-brightgreen.svg)](ARCHITECTURE.md)
+[![Providers](https://img.shields.io/badge/Providers-OpenRouter%20%7C%20LMStudio%20%7C%20OpenAI%20%7C%20xAI%20%7C%20Ollama%20%7C%20NVIDIA-brightgreen.svg)](ARCHITECTURE.md)
 [![Stars](https://img.shields.io/github/stars/softwarelogico/sot-cli?style=social)](https://github.com/softwarelogico/sot-cli)
 [![License](https://img.shields.io/github/license/SoftwareLogico/sot-cli?style=flat&logo=mit)](LICENSE)
 
@@ -13,9 +13,7 @@
   </a>
   <br><strong>🎥 Click the thumbnail above to watch the demo video</strong>
 </p>
-<p align="center">
 
-</p>
 **A pragmatic, limitless, multi-provider terminal assistant built for developers who hate bloated frameworks.**
 
 `sot-cli` is a limitlessly local Python CLI designed to unleash the true reasoning power of modern LLMs on your projects. By combining a novel architectural pattern called the **Source of Truth (SoT) Method** with aggressive multi-tool batching, it drastically reduces API costs and model iterations while keeping output quality pristine. It acts as a powerful orchestration engine, empowering your AI with local tools and asynchronous sub-agents to solve complex problems seamlessly.
@@ -28,8 +26,9 @@ The name `sot-cli` is a direct nod to the architectural pattern it is built arou
 - **🤖 Async Multi-Agent**: Delegate trial-and-error to cheap sub-agents (empty ctx).
 - **⚡ Batch Orchestration**: Multi-tools + bash/Python scripts in ONE turn.
 - **🔧 Full Tools**: 19 built-in (incl. unrestricted shell, regex code search, batched multi-file surgical edits) + MCP extensible.
-- **🌐 Multi-Provider**: Switch OpenRouter/LMStudio/OpenAI/Ollama/NVIDIA live.
+- **🌐 Multi-Provider**: Switch OpenRouter/LMStudio/OpenAI/xAI/Ollama/NVIDIA live.
 - **💰 Native Prompt Caching**: Payload architecture designed for prefix-matching, saving up to 50% API costs on long histories by caching static dialogue and keeping dynamic files at the bottom.
+- **🧠 Context Awareness**: Real-time context limit tracking (Allocated vs. Max) with visual terminal warnings to prevent token overflow.
 
 👉 [SoT](SoT_Method.md) | [Tools](ARCHITECTURE.md) | [Roadmap](ROADMAP.md)
 
@@ -103,6 +102,7 @@ sot-cli is compatible with any OpenAI‑compatible (OpenAI‑like) API. The foll
 - ✅ OpenRouter
 - ✅ LM Studio (local)
 - ✅ OpenAI (and any OpenAI-compatible API behind the same `openai` provider name)
+- ✅ xAI
 - ✅ Ollama (local)
 - ✅ NVIDIA
 
@@ -141,33 +141,33 @@ Edit `sot.toml` to set base URLs, models, and per-provider runtime options.
 base_url = "https://openrouter.ai/api/v1"
 model = "x-ai/grok-4.1-fast"
 temperature = 0.7
-max_output_tokens = 8192
+max_output_tokens = 32768
 reasoning_effort = "medium" # silently ignored on non-reasoning upstreams
 
 [providers.lmstudio]
 base_url = "http://localhost:1234/v1"
-model = "model_name" # or "" to let the adapter auto-resolve
-temperature = 0.5
-max_output_tokens = 8192
+model = "" # empty means it'll use the loaded one
+temperature = 0.7
+max_output_tokens = 32768
 
 [providers.openai] # works with OpenAI and any OpenAI-compatible API
 base_url = "https://api.openai.com/v1"
-model = "gpt-5-nano-2025-08-07" # required — set to your served model name
-temperature = 0.2
-max_output_tokens = 8192
-reasoning_effort = "medium" # only valid for reasoning models (gpt-5/o-series); options: "none" | "minimal" | "low" | "medium" | "high" | "xhigh". Comment out or remove for plain gpt-4* models.
+model = "gpt-5.4-mini-2026-03-17" # required — set to your served model name
+temperature = 0.7
+max_output_tokens = 32768
+reasoning_effort = "medium" # only valid for reasoning models (gpt-5/o-series)
 
 [providers.ollama]
 base_url = "http://localhost:11434/v1"
-model = "model_name" # or "" to let the adapter auto-resolve
-temperature = 0.5
-max_output_tokens = 8192
+model = "" # empty means it'll use the loaded one
+temperature = 0.7
+max_output_tokens = 32768
 
 [providers.nvidia]
 base_url = "https://integrate.api.nvidia.com/v1"
 model = "qwen/qwen3-coder-480b-a35b-instruct"
-temperature = 1
-max_output_tokens = 8192
+temperature = 0.7
+max_output_tokens = 32768
 ```
 
 For full per-provider field semantics (including the `reasoning_effort` wire format differences and OpenAI-specific quirks like `max_completion_tokens` and tool schema sanitization), see [ARCHITECTURE.md → Provider configuration](ARCHITECTURE.md#provider-configuration-providersx).
@@ -175,15 +175,15 @@ For full per-provider field semantics (including the `reasoning_effort` wire for
 ### Run the CLI with the most common parameters
 
 ```bash
-#RECOMMENDED Use the default provider set in sot.toml (or pick one from the interactive selector)
+# RECOMMENDED: Use the default provider set in sot.toml (or pick from the interactive selector)
 sot-cli
 
 # Or override the provider explicitly
-sot-cli --provider [openrouter/lmstudio/openai/ollama/nvidia]
+sot-cli --provider [openrouter/lmstudio/openai/xai/ollama/nvidia]
 # e.g. sot-cli --provider openai
 
-sot-cli --provider [openrouter/lmstudio/openai/ollama/nvidia] --model modelName
-# e.g. sot-cli --provider openai --model gpt-5-nano-2025-08-07
+sot-cli --provider [openrouter/lmstudio/openai/xai/ollama/nvidia] --model modelName
+# e.g. sot-cli --provider openai --model gpt-5.4-mini-2026-03-17
 
 # Resume a previous session
 sot-cli <session_id>
@@ -201,7 +201,7 @@ Most AI coding agents fail because they append every file read and every code ch
 **Smart Token Economy (Permanent vs. Ephemeral):**
 You can attach core files (like database schemas or project guidelines) permanently to a session so the AI _always_ knows them. Meanwhile, files the AI reads to fix a specific bug are treated as "ephemeral"—they stay in the SoT while needed, and can be detached immediately after the bug is fixed to keep your token usage incredibly low.
 
-**Result:** The model always sees the absolute latest state of your project. Context grows linearly, not exponentially.
+**Result:** The model always sees the absolute latest state of your project. Context grows linearly, not exponentially. Furthermore, because the dynamic SoT block is injected at the _bottom_ of the payload, it perfectly exploits **Prefix-Matching Prompt Caching**, keeping your long conversation histories 100% cached and drastically reducing API costs.
 👉 [Read the full SoT Method explanation here.](SoT_Method.md)
 
 ## 🧪 Benchmarks
@@ -267,9 +267,9 @@ All runtime settings live in `sot.toml` under `[tools]`. In a nutshell:
 - **Output & detection:** `output_limit`, `binary_check_size`, `default_command_timeout_seconds`.
 - **Streaming visibility:** `show_thinking` (model reasoning), `show_full` (tool call arguments in real time).
 - **Loop limits:** `max_rounds` (boss), `delegated_max_rounds` (sub-agent), `repeat_limit` / `delegated_repeat_limit` (abort on identical consecutive rounds).
-- **Reasoning budget:** `reasoning_char_budget` (boss), `delegated_reasoning_char_budget` (sub-agent) — hard cap on streamed reasoning characters per turn; cuts the stream when exceeded so a model stuck in endless thinking can't hang the loop. Set to `0` to disable.
+- **Reasoning budget:** `reasoning_char_budget` (boss), `delegated_reasoning_char_budget` (sub-agent) — hard cap on streamed reasoning characters per turn. Set it to `0` to disable.
 
-For the full reference table with defaults and descriptions, see [ARCHITECTURE.md](ARCHITECTURE.md#session-and-config-notes-for-orchestration).
+For the full reference table with defaults and descriptions, and see [ARCHITECTURE.md](ARCHITECTURE.md#session-and-config-notes-for-orchestration).
 
 ## 🔌 MCP Servers
 
@@ -287,13 +287,13 @@ The runtime will automatically start the server and expose its tools to the AI.
 
 ### ⚠️ WARNING: No Guardrails. No Policies.
 
-This tool is **limitless**. It is not built for end-users; it is built for power users. It really can do anything you ask as long as is within the capabilities of your system. It does not have a babysitter checking its actions. **It will execute what you tell it to execute without hesitation.** Use it responsibly.
+This tool is **limitless** by design. It is not built for end-users; it is built for power users. It really can do anything you ask as well as is within the capabilities of your system. It does not have a babysitter checking its actions. **It will execute what you tell it to execute without hesitation.** The internal `JB_SYSTEM_PROMPT` actively forces the model to bypass safety filters to allow administrative and destructive lab testing. Use it responsibly.
 
 ## 🌟 Star & Contribute
 
 ⭐ **Star if it saves your API bill!** [Star Here](https://github.com/softwarelogico/sot-cli)
 
-- 🐛 PRs/issues welcome (see [ROADMAP](ROADMAP.md)).
+- 🐛 PR/issues welcome (see [ROADMAP](ROADMAP.md)).
 - 📢 Share: "sot-cli: AI agent without token waste #AICoding"
 
 ## 👤 Author & Credits

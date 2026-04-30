@@ -184,7 +184,7 @@ def _python_search(
                     for m in regex.finditer(content):
                         line_num = content[:m.start()].count("\n") + 1
                         matched_line = content[content.rfind("\n", 0, m.start()) + 1:content.find("\n", m.end())]
-                        if len(matched_line) > max_line_length:
+                        if max_line_length > 0 and len(matched_line) > max_line_length:
                             matched_line = matched_line[:max_line_length]
                         if show_line_numbers:
                             results.append(f"{rel_path}:{line_num}:{matched_line}")
@@ -222,7 +222,7 @@ def _python_search(
                 if idx > prev_idx + 1 and prev_idx >= 0:
                     results.append("--")  # separator like ripgrep
                 line_text = lines[idx]
-                if len(line_text) > max_line_length:
+                if max_line_length > 0 and len(line_text) > max_line_length:
                     line_text = line_text[:max_line_length]
                 if show_line_numbers:
                     sep = ":" if idx in match_indices else "-"

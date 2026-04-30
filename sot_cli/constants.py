@@ -75,8 +75,8 @@ FALLBACK_SEARCH_TIMEOUT_SECONDS = 30
 # If the model's reasoning channel exceeds this budget without emitting
 # a final answer or tool call, the stream is cut and the round advances.
 # Set to 0 to disable the cap.
-FALLBACK_REASONING_CHAR_BUDGET = 8000
-FALLBACK_DELEGATED_REASONING_CHAR_BUDGET = 4000
+FALLBACK_REASONING_CHAR_BUDGET = 0
+FALLBACK_DELEGATED_REASONING_CHAR_BUDGET = 0
 # Hard cap on characters kept from the `reasoning` field of any tool-bearing
 # assistant message in OLD (already-closed) turns when the outbound payload
 # is built. Keeps the narrative ("the model used edit_files because…") while

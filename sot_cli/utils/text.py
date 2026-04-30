@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 def _truncate(text: str, limit: int) -> str:
-    if len(text) <= limit:
+    if limit <= 0 or len(text) <= limit:
         return text
     return text[:limit] + "\n...[truncated]"
 

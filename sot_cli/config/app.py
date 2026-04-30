@@ -58,9 +58,9 @@ class MCPServerConfig:
 
 @dataclass
 class ToolConfig:
-    output_limit: int = 12000
+    output_limit: int = 0
     default_command_timeout_seconds: int = 180
-    binary_check_size: int = 8192
+    binary_check_size: int = 0
     show_thinking: bool = True
     show_full: bool = True
     max_rounds: int = 25
@@ -70,7 +70,7 @@ class ToolConfig:
     search_default_head_limit: int = 200
     search_max_line_length: int = 500
     search_timeout_seconds: int = 30
-    reasoning_char_budget: int = 8000
+    reasoning_char_budget: int = 0
     delegated_reasoning_char_budget: int = 4000
     compression_reasoning_trunc_chars: int = 240
 
@@ -223,23 +223,23 @@ def _parse_app_config(raw: dict[str, Any], keys_raw: dict[str, Any] | None = Non
         prompt=PromptConfig(system=str(prompt_raw.get("system", "")).strip()),
         runtime=RuntimeConfig(primary_provider=primary_provider),
         tools=ToolConfig(
-            output_limit=_parse_positive_int(tools_raw.get("output_limit", 12000), "tools.output_limit"),
+            output_limit=_parse_non_negative_int(tools_raw.get("output_limit", 0), "tools.output_limit"),
             default_command_timeout_seconds=_parse_non_negative_int(
                 tools_raw.get("default_command_timeout_seconds", 180),
                 "tools.default_command_timeout_seconds",
             ),
-            binary_check_size=_parse_positive_int(tools_raw.get("binary_check_size", 8192), "tools.binary_check_size"),
+            binary_check_size=_parse_non_negative_int(tools_raw.get("binary_check_size", 0), "tools.binary_check_size"),
             show_thinking=_parse_bool(tools_raw.get("show_thinking", True), "tools.show_thinking"),
             show_full=_parse_bool(tools_raw.get("show_full", True), "tools.show_full"),
-            max_rounds=_parse_positive_int(tools_raw.get("max_rounds", 25), "tools.max_rounds"),
-            delegated_max_rounds=_parse_positive_int(tools_raw.get("delegated_max_rounds", 8), "tools.delegated_max_rounds"),
-            repeat_limit=_parse_positive_int(tools_raw.get("repeat_limit", 3), "tools.repeat_limit"),
-            delegated_repeat_limit=_parse_positive_int(tools_raw.get("delegated_repeat_limit", 2), "tools.delegated_repeat_limit"),
-            search_default_head_limit=_parse_positive_int(
+            max_rounds=_parse_non_negative_int(tools_raw.get("max_rounds", 25), "tools.max_rounds"),
+            delegated_max_rounds=_parse_non_negative_int(tools_raw.get("delegated_max_rounds", 8), "tools.delegated_max_rounds"),
+            repeat_limit=_parse_non_negative_int(tools_raw.get("repeat_limit", 3), "tools.repeat_limit"),
+            delegated_repeat_limit=_parse_non_negative_int(tools_raw.get("delegated_repeat_limit", 2), "tools.delegated_repeat_limit"),
+            search_default_head_limit=_parse_non_negative_int(
                 tools_raw.get("search_default_head_limit", 200),
                 "tools.search_default_head_limit",
             ),
-            search_max_line_length=_parse_positive_int(
+            search_max_line_length=_parse_non_negative_int(
                 tools_raw.get("search_max_line_length", 500),
                 "tools.search_max_line_length",
             ),

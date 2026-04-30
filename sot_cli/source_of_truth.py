@@ -171,7 +171,7 @@ def _is_probably_text(path: Path) -> bool:
 
     # Content-based detection: read a chunk and check for binary markers
     try:
-        chunk = path.read_bytes()[:8192]
+        chunk = path.read_bytes()[:32768]
     except OSError:
         return False
 

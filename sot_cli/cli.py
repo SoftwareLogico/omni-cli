@@ -22,6 +22,7 @@ from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
+from rich.markup import escape  # <-- AÑADIDO PARA EVITAR MARKUP ERRORS
 
 from typing import Any
 
@@ -68,17 +69,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return _dispatch(args)
     except Exception as exc:
-        error_console.print(f"[bold red]Error:[/bold red] {exc}")
+        # ESCAPAMOS EL ERROR PARA QUE RICH NO CRASHEE SI EL ERROR CONTIENE CORCHETES
+        error_console.print(f"[bold red]Error:[/bold red] {escape(str(exc))}")
         return 1
 
 
 def _normalize_argv_for_default_prompt(argv: list[str] | None) -> list[str] | None:
-    """Insert the implicit `prompt` command when the user omits it.
-
-    Examples:
-    - sot-cli --provider openrouter -> sot-cli prompt --provider openrouter
-    - sot-cli SESSION_ID -> sot-cli prompt SESSION_ID
-    """
+    """Insert the implicit `prompt` command when the user omits it."""
     if argv is None:
         raw_args = sys.argv[1:]
         should_return_none = True
@@ -152,10 +149,6 @@ def _format_capability_line(cap: ProviderCapability) -> tuple[str, str]:
 
 
 def _format_token_count(n: int) -> str:
-    """Format token count as compact string: 131072 -> '128k', 1000000 -> '1M'.
-
-    Tries 1000-base first (128000 -> 128k), then 1024-base (131072 -> 128k).
-    """
     if n >= 1_000_000:
         if n % 1_000_000 == 0:
             return f"{n // 1_000_000}M"
@@ -172,14 +165,6 @@ def _format_token_count(n: int) -> str:
 
 
 def _load_chat_history_from_request_jsons(session_dir: Path) -> list[dict[str, Any]] | None:
-    """Reconstruct chat_history from persisted request/response JSON files.
-
-    Reads request.json (contains [system, ...history..., SoT]) and
-    response-chunks.json (last assistant response as streaming chunks).
-    Strips system prompt and ephemeral SoT block. Concatenates chunks
-    into the final assistant message. Returns the complete chat_history
-    or None if the session JSON files are missing/corrupt.
-    """
     request_path = session_dir / "request.json"
     chunks_path = session_dir / "response-chunks.json"
 
@@ -195,9 +180,6 @@ def _load_chat_history_from_request_jsons(session_dir: Path) -> list[dict[str, A
     if not messages:
         return None
 
-    # Extract chat_history: skip system prompt, SoT blocks, orchestration rules,
-    # and CURRENT METADATA blocks (all ephemeral — the runtime re-injects fresh
-    # versions each turn; persisting them in chat_history would duplicate them).
     chat_messages: list[dict[str, Any]] = []
     for msg in messages:
         role = msg.get("role", "")
@@ -210,13 +192,6 @@ def _load_chat_history_from_request_jsons(session_dir: Path) -> list[dict[str, A
             continue
         if role == "user" and isinstance(content, str) and content.startswith("=== CURRENT METADATA ==="):
             continue
-        # Resumed sessions whose request.json was written before the
-        # streaming round started consolidating reasoning_details still
-        # carry one entry per token (dozens or hundreds of tiny dicts
-        # with redundant metadata). Collapse them on load so the rest
-        # of the runtime — and the provider on the next turn — sees the
-        # compact form. Idempotent: already-consolidated entries pass
-        # through unchanged.
         if role == "assistant" and isinstance(msg.get("reasoning_details"), list):
             cleaned = dict(msg)
             cleaned["reasoning_details"] = _consolidate_reasoning_details(msg["reasoning_details"])
@@ -224,7 +199,6 @@ def _load_chat_history_from_request_jsons(session_dir: Path) -> list[dict[str, A
             continue
         chat_messages.append(msg)
 
-    # Reconstruct last assistant response from streaming chunks
     if chunks_path.exists():
         try:
             chunks = json.loads(chunks_path.read_text(encoding="utf-8"))
@@ -238,7 +212,6 @@ def _load_chat_history_from_request_jsons(session_dir: Path) -> list[dict[str, A
 
 
 def _reconstruct_assistant_from_chunks(chunks: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Concatenate streaming chunks into a single assistant message."""
     text_parts: list[str] = []
     tool_state: dict[int, dict[str, Any]] = {}
 
@@ -274,25 +247,24 @@ def _reconstruct_assistant_from_chunks(chunks: list[dict[str, Any]]) -> dict[str
 
 
 def _replay_conversation(history: list[dict[str, Any]]) -> None:
-    """Print the loaded conversation so the user sees where they left off."""
     console.print("[dim]─── session history ───[/dim]")
     for msg in history:
         role = msg.get("role", "")
         if role == "user":
             content = msg.get("content", "")
             if isinstance(content, str):
-                console.print(f"[bold cyan]you>[/bold cyan] {content}")
+                console.print(f"[bold cyan]you>[/bold cyan] {escape(content)}")
         elif role == "assistant":
             text = msg.get("content") or ""
             tool_calls = msg.get("tool_calls", [])
             if tool_calls:
                 names = [tc.get("function", {}).get("name", "?") for tc in tool_calls]
-                console.print(f"[blue]assistant>[/blue] [dim]called {', '.join(names)}[/dim]")
+                console.print(f"[blue]assistant>[/blue] [dim]called {escape(', '.join(names))}[/dim]")
             if text:
-                console.print(f"[blue]assistant>[/blue] {text}")
+                console.print(f"[blue]assistant>[/blue] {escape(text)}")
         elif role == "tool":
             content = msg.get("content", "")
-            console.print(f"[dim]tool> {content}[/dim]")
+            console.print(f"[dim]tool> {escape(content)}[/dim]")
     console.print("[dim]─── end of history ───[/dim]\n")
 
 
@@ -301,24 +273,6 @@ def _save_last_turn_metadata(
     snapshot: dict[str, Any],
     render_extras: dict[str, Any] | None = None,
 ) -> None:
-    """Persist the per-turn meta_snapshot to session_dir/turn_metadata.json.
-
-    The file uses a wrapper shape::
-
-        {
-            "snapshot": <slim dict for CURRENT METADATA injection>,
-            "render":   <rich raw fields used ONLY when rebuilding the
-                         resumed Turn Summary table — file lists, agent
-                         statuses, raw context numbers, etc.>
-        }
-
-    The split keeps the model-bound CURRENT METADATA block lean (so the LLM
-    doesn't see noisy lists every turn) while still giving the resumed
-    banner enough data to reproduce the live Turn Summary 1:1.
-
-    Failures are swallowed: a missing/unwritable file must never abort a
-    successful turn.
-    """
     try:
         session_dir.mkdir(parents=True, exist_ok=True)
         target = session_dir / "turn_metadata.json"
@@ -332,21 +286,6 @@ def _save_last_turn_metadata(
 
 
 def _load_last_turn_metadata(session_dir: Path) -> dict[str, Any] | None:
-    """Recover the previous turn's metadata as ``{"snapshot": ..., "render": ...}``.
-
-    Strategy:
-
-    1. Prefer ``turn_metadata.json`` (written at end of each turn — exact).
-       Supports both the new wrapper shape and the legacy flat-dict shape
-       written by earlier builds (auto-wrapped on read).
-    2. Fall back to parsing the ``=== CURRENT METADATA ===`` user message
-       embedded in the most recent ``request.json``. That block represents
-       the turn-before-last (CURRENT METADATA always describes the turn
-       that just FINISHED relative to the request being sent), so it's a
-       best-effort approximation for sessions persisted before
-       ``turn_metadata.json`` existed. ``render`` is empty in this case;
-       the table degrades gracefully (no per-file or per-agent rows).
-    """
     target = session_dir / "turn_metadata.json"
     if target.exists():
         try:
@@ -358,7 +297,6 @@ def _load_last_turn_metadata(session_dir: Path) -> dict[str, Any] | None:
                         "render": data.get("render") if isinstance(data.get("render"), dict) else {},
                     }
                 if data:
-                    # Legacy: flat dict written before the wrapper existed.
                     return {"snapshot": data, "render": {}}
         except (json.JSONDecodeError, OSError):
             pass
@@ -402,38 +340,27 @@ def _render_resumed_summary(
     render_extras: dict[str, Any],
     session_id: str,
 ) -> None:
-    """Reproduce the live Turn Summary table from a saved snapshot.
-
-    Mirrors the layout of the post-turn table in :func:`_run_command_turn`
-    so the user sees the *same* rows on resume — including the SoT file
-    list, the context bar with color/warnings, and per-agent statuses —
-    not just a flat key/value dump. Falls back to the slim string form
-    when only the legacy snapshot is available (no render bundle).
-    """
     if not snapshot and not render_extras:
         return
 
     table = Table(title="Last Turn Summary & Usage (restored)")
     table.add_column("Metric")
     table.add_column("Value", justify="right")
-    table.add_row("Session ID", str(snapshot.get("Session ID", session_id)))
+    table.add_row("Session ID", escape(str(snapshot.get("Session ID", session_id))))
 
     main_tokens = snapshot.get("Main Agent Tokens")
     if main_tokens not in (None, ""):
-        table.add_row("Main Agent Tokens", str(main_tokens))
+        table.add_row("Main Agent Tokens", escape(str(main_tokens)))
     delegated = snapshot.get("Sub-Agents Tokens")
     if delegated:
-        table.add_row("Sub-Agents Tokens", str(delegated))
+        table.add_row("Sub-Agents Tokens", escape(str(delegated)))
     total = snapshot.get("Total Tokens")
     if total not in (None, ""):
-        table.add_row("Total Tokens", str(total), style="bold cyan")
+        table.add_row("Total Tokens", escape(str(total)), style="bold cyan")
     cost = snapshot.get("Total Cost")
     if cost:
-        table.add_row("Total Cost", str(cost), style="bold green")
+        table.add_row("Total Cost", escape(str(cost)), style="bold green")
 
-    # Reconstruct the context-usage bar from raw numbers persisted in the
-    # render bundle. Mirrors the live renderer in _run_command_turn (same
-    # 10-cell █/░ bar, same green/yellow/red thresholds, same warning copy).
     ctx_pct = render_extras.get("ctx_pct")
     ctx_prompt = render_extras.get("ctx_prompt")
     ctx_max = render_extras.get("ctx_max")
@@ -449,7 +376,7 @@ def _render_resumed_summary(
         color = "red" if pct > 90 else "yellow" if pct > 75 else "green"
         prompt_n = int(ctx_prompt) if isinstance(ctx_prompt, (int, float)) else 0
         table.add_row(
-            ctx_label,
+            escape(ctx_label),
             f"[{color}]{bar} {pct}% ({prompt_n}/{int(ctx_max)})[/{color}]",
         )
         if pct >= 90:
@@ -463,8 +390,7 @@ def _render_resumed_summary(
                 "[bold yellow]⚠️ Context is getting full. Consider detaching unused files.[/bold yellow]",
             )
     elif snapshot.get("Context"):
-        # Legacy snapshots only have the pre-formatted "88% (x/y)" string.
-        table.add_row("Context", str(snapshot["Context"]))
+        table.add_row("Context", escape(str(snapshot["Context"])))
 
     sot_files = render_extras.get("sot_files") or []
     if isinstance(sot_files, list) and sot_files:
@@ -479,16 +405,15 @@ def _render_resumed_summary(
         )
         for fpath in sorted(str(p) for p in sot_files):
             fname = Path(fpath).name
-            table.add_row(f"  📄 {fname}", "[dim]in context[/dim]")
+            table.add_row(f"  📄 {escape(fname)}", "[dim]in context[/dim]")
     elif snapshot.get("SoT Tracked Files"):
-        # Legacy: only the count survived.
         try:
             table.add_section()
         except Exception:
             pass
         table.add_row(
             "SoT Tracked Files",
-            str(snapshot["SoT Tracked Files"]),
+            escape(str(snapshot["SoT Tracked Files"])),
             style="bold magenta",
         )
 
@@ -508,22 +433,22 @@ def _render_resumed_summary(
             else:
                 continue
             color = "green" if str(status).upper() == "SUCCESS" else "red"
-            table.add_row(f"  {name}", f"[{color}]{status}[/{color}]")
+            table.add_row(escape(f"  {name}"), f"[{color}]{escape(str(status))}[/{color}]")
     elif snapshot.get("Agents Used"):
         try:
             table.add_section()
         except Exception:
             pass
-        table.add_row("Agents Used", str(snapshot["Agents Used"]))
+        table.add_row("Agents Used", escape(str(snapshot["Agents Used"])))
 
     try:
         table.add_section()
     except Exception:
         pass
     if snapshot.get("Timestamp"):
-        table.add_row("Timestamp", str(snapshot["Timestamp"]))
+        table.add_row("Timestamp", escape(str(snapshot["Timestamp"])))
     if snapshot.get("Turn Duration"):
-        table.add_row("Turn Duration", str(snapshot["Turn Duration"]), style="bold yellow")
+        table.add_row("Turn Duration", escape(str(snapshot["Turn Duration"])), style="bold yellow")
 
     console.print(table)
 
@@ -532,14 +457,6 @@ def _render_resumed_summary(
 
 
 def _detect_first_run_root() -> Path | None:
-    """Walk up from cwd looking for sot.example.toml.
-
-    Returns the directory containing it when first-run setup is required
-    (i.e. the example exists but sot.toml or sot.keys.toml are missing).
-    Returns None if everything is already configured, or if no example
-    files can be found anywhere in the path (in which case we cannot
-    auto-bootstrap and the caller should let load_config raise normally).
-    """
     start = Path.cwd().resolve()
     for directory in (start, *start.parents):
         if (directory / "sot.example.toml").exists():
@@ -552,7 +469,6 @@ def _detect_first_run_root() -> Path | None:
 
 
 def _read_provider_names_from_toml(toml_path: Path) -> list[str]:
-    """Return the provider names defined as [providers.X] tables in the TOML."""
     try:
         with toml_path.open("rb") as handle:
             data = tomllib.load(handle)
@@ -565,7 +481,6 @@ def _read_provider_names_from_toml(toml_path: Path) -> list[str]:
 
 
 def _read_toml_string(toml_path: Path, section_path: list[str], field: str, default: str = "") -> str:
-    """Read a string field from a nested TOML section. Returns default on any error."""
     try:
         with toml_path.open("rb") as handle:
             data: Any = tomllib.load(handle)
@@ -583,23 +498,6 @@ def _read_toml_string(toml_path: Path, section_path: list[str], field: str, defa
 
 
 def _extract_section_header(line: str) -> str | None:
-    """Return the canonical `[section]` header for a TOML line, or None if the
-    line is not a section header.
-
-    Tolerates two real-world quirks our hand-edited toml files have:
-
-    1. Leading/trailing whitespace around the header.
-    2. **Inline comments after the closing `]`**, e.g.
-       ``[providers.openai] # works with OpenAI and any OpenAI-compatible API``.
-       The previous implementation matched section headers with
-       ``stripped.endswith("]")`` and silently dropped these on the floor —
-       which is why writes to fields inside such a section (notably the
-       ``configured = true`` marker) appeared to "do nothing".
-
-    Quoted keys with embedded ``]`` (e.g. ``[a."weird]name"]``) are not
-    handled; the wizard never writes such headers, so the simple "first ``]``
-    wins" rule is enough for our toml shape.
-    """
     stripped = line.lstrip()
     if not stripped.startswith("["):
         return None
@@ -608,20 +506,12 @@ def _extract_section_header(line: str) -> str | None:
         return None
     header = stripped[: end + 1]
     rest = stripped[end + 1 :].lstrip()
-    # After the closing `]` only whitespace or a `#` comment may appear; if
-    # something else is there (`[foo]bar = 1`), it's not a real header line.
     if rest and not rest.startswith("#"):
         return None
     return header
 
 
 def _update_toml_string_field(toml_path: Path, section_header: str, field: str, new_value: str) -> bool:
-    """Surgical text-based update of a string field in a TOML section.
-
-    `section_header` looks like "[providers.openrouter]". Preserves comments,
-    whitespace, and unrelated fields. Only the first occurrence inside the
-    target section is rewritten. Returns True when an update was applied.
-    """
     try:
         text = toml_path.read_text(encoding="utf-8")
     except OSError:
@@ -645,7 +535,6 @@ def _update_toml_string_field(toml_path: Path, section_header: str, field: str, 
 
 
 def _ask(prompt_text: str) -> str:
-    """Read a visible line from the user. Aborts cleanly on Ctrl+C / EOF."""
     try:
         return input(prompt_text)
     except (EOFError, KeyboardInterrupt):
@@ -654,7 +543,6 @@ def _ask(prompt_text: str) -> str:
 
 
 def _select_provider_interactive(providers: list[str], current_default: str | None = None) -> str:
-    """Render a numbered selector. Accepts number or exact provider name."""
     if not providers:
         error_console.print("[red]No providers found in sot.toml.[/red]")
         sys.exit(1)
@@ -662,9 +550,6 @@ def _select_provider_interactive(providers: list[str], current_default: str | No
     console.print("\n[bold]Select a provider:[/bold]")
     for i, name in enumerate(providers, 1):
         marker = "  [yellow](default)[/yellow]" if name == current_default else ""
-        # Hint shown next to provider names whose adapter doubles as a generic
-        # transport (currently only "openai", which speaks to both the real
-        # OpenAI API and any OpenAI-compatible service).
         hint = "  [dim](or any OpenAI-compatible API)[/dim]" if name == "openai" else ""
         console.print(f"  {i}. {name}{hint}{marker}")
 
@@ -679,17 +564,10 @@ def _select_provider_interactive(providers: list[str], current_default: str | No
                 return providers[idx]
         elif choice in providers:
             return choice
-        console.print(f"[red]Invalid choice: {choice!r}[/red]")
+        console.print(f"[red]Invalid choice: {escape(choice)}[/red]")
 
 
 def _first_run_setup() -> str:
-    """Bootstrap config files and configure the first provider.
-
-    Renames sot.example.toml -> sot.toml and sot.keys.example.toml ->
-    sot.keys.toml (without rewriting their contents), then prompts the user
-    for a provider plus the credentials/URL needed for it. Returns the
-    selected provider so the caller can use it for the current session.
-    """
     root = _detect_first_run_root()
     if root is None:
         error_console.print(
@@ -703,7 +581,6 @@ def _first_run_setup() -> str:
     sot_example = root / "sot.example.toml"
     sot_keys_example = root / "sot.keys.example.toml"
 
-    # 1. Welcome — big SOT-CLI, thanks, manifesto-ish brief, and a "let's connect" line.
     sot_logo = (
         "[bold cyan]"
         " ▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄      ▄▄▄▄▄▄▄  ▄        ▄▄▄▄▄▄▄ \n"
@@ -746,32 +623,20 @@ def _first_run_setup() -> str:
     )
     console.print()
 
-    # 2. Decide which file we read provider definitions from. We do NOT
-    # materialize the real sot.toml / sot.keys.toml yet — that happens at
-    # the very end, only after the user finishes the wizard. This way a
-    # Ctrl+C or hard exit at any point during the questions leaves the
-    # filesystem untouched and the next launch goes back through the
-    # wizard cleanly. If a previous aborted run had partially created the
-    # real files, we prefer those (so the user doesn't see stale defaults).
     source_toml = sot_toml if sot_toml.exists() else sot_example
     source_keys = sot_keys_toml if sot_keys_toml.exists() else sot_keys_example
     if not source_toml.exists() or not source_keys.exists():
         error_console.print(
-            f"[red]Missing template files in {root}.[/red] "
+            f"[red]Missing template files in {escape(str(root))}.[/red] "
             "Expected sot.example.toml and sot.keys.example.toml."
         )
         sys.exit(1)
 
-    # 3. Pick a provider from the ones defined in the template.
     providers = _read_provider_names_from_toml(source_toml)
     selected = _select_provider_interactive(providers)
     is_local = selected in {"lmstudio", "ollama"}
     key_optional = selected in _OPTIONAL_KEY_PROVIDERS
 
-    # 4. API key — required for remote providers that need auth, optional for
-    # everything in `_OPTIONAL_KEY_PROVIDERS` (local servers and openai, since
-    # the openai adapter is also used to reach OpenAI-compatible APIs that may
-    # not require a key).
     if key_optional:
         key_input = _ask(
             f"\nAPI key for {selected} (optional, press Enter to leave empty): "
@@ -781,39 +646,27 @@ def _first_run_setup() -> str:
             key_input = _ask(f"\nAPI key for {selected}: ").strip()
             if key_input:
                 break
-            console.print(f"[red]An API key is required for {selected}.[/red]")
+            console.print(f"[red]An API key is required for {escape(selected)}.[/red]")
 
-    # 5. Base URL — local providers go through the host/port helper, openai
-    # has its own simple "default-or-custom" prompt (since the OpenAI-style
-    # base URL is a full URL, not host+port). Other remote providers keep
-    # the URL hard-coded in the example toml and do not ask. Stored in
-    # memory only; the toml is updated below once the wizard finishes.
     new_url: str | None = None
     if is_local:
         new_url = _ask_local_url(selected)
     elif selected == "openai":
         new_url = _ask_openai_url()
 
-    # 5b. Model — only for providers that expose a meaningful model field in
-    # the toml. The default shown comes from whatever the source toml already
-    # has (the bundled example on first run). Optional: Enter keeps it as-is.
     new_model: str | None = None
     if selected in _MODEL_CONFIGURABLE_PROVIDERS:
         current_model = _read_toml_string(source_toml, ["providers", selected], "model")
         new_model = _ask_model(selected, current_model)
 
-    # 6. Commit phase — the user has answered everything, only now do we
-    # touch the filesystem. Copy templates first, then apply the field
-    # updates we collected above. If anything fails before this point the
-    # repo is exactly as it was when sot-cli was launched.
     if not sot_toml.exists():
         console.print(
-            f"[yellow]Creating {sot_toml.name} from {sot_example.name}...[/yellow]"
+            f"[yellow]Creating {escape(sot_toml.name)} from {escape(sot_example.name)}...[/yellow]"
         )
         shutil.copy2(sot_example, sot_toml)
     if not sot_keys_toml.exists():
         console.print(
-            f"[yellow]Creating {sot_keys_toml.name} from {sot_keys_example.name}...[/yellow]"
+            f"[yellow]Creating {escape(sot_keys_toml.name)} from {escape(sot_keys_example.name)}...[/yellow]"
         )
         shutil.copy2(sot_keys_example, sot_keys_toml)
 
@@ -827,25 +680,20 @@ def _first_run_setup() -> str:
         if new_model != current_model_in_toml:
             _update_toml_string_field(sot_toml, f"[providers.{selected}]", "model", new_model)
     _update_toml_string_field(sot_toml, "[runtime]", "primary_provider", selected)
-    # Mark this provider as configured so future selector picks of the same
-    # provider don't re-trigger the per-provider config flow. Other providers
-    # in the toml stay unmarked and will be configured on demand.
     _set_toml_bool_field(sot_toml, f"[providers.{selected}]", "configured", True)
 
-    # 7. Final summary + pointers — show the user what will be wired up before
-    # they enter the session, then point to the files they can tweak later.
     final_url = _read_toml_string(sot_toml, ["providers", selected], "base_url")
     final_model = _read_toml_string(sot_toml, ["providers", selected], "model")
     console.print("\n[bold green]Setup complete.[/bold green]\n")
     console.print(
-        f"  [bold]provider[/bold]  [bold yellow]{selected.upper()}[/bold yellow]"
+        f"  [bold]provider[/bold]  [bold yellow]{escape(selected.upper())}[/bold yellow]"
     )
     console.print(
-        f"  [bold]route[/bold]     [yellow]{final_url}[/yellow]"
+        f"  [bold]route[/bold]     [yellow]{escape(final_url)}[/yellow]"
     )
     if final_model:
         console.print(
-            f"  [bold]model[/bold]     [yellow]{final_model}[/yellow]"
+            f"  [bold]model[/bold]     [yellow]{escape(final_model)}[/yellow]"
         )
     console.print()
     console.print(
@@ -867,38 +715,15 @@ _LOCAL_DEFAULT_PORTS: dict[str, str] = {
     "ollama": "11434",
 }
 
-# Providers where the API key is optional during the wizard. `openai` is
-# included because the same adapter is used to talk to any OpenAI-compatible
-# API, and many of those (local OpenAI-like servers, internal gateways) do
-# not require a key.
 _OPTIONAL_KEY_PROVIDERS: set[str] = {"lmstudio", "ollama", "openai"}
-
-# Providers that expose a "model = ..." field worth asking the user about
-# during the wizard. Local servers (lmstudio, ollama) auto-resolve whatever
-# model is currently loaded, so we leave them out — asking would just
-# duplicate that selection. The wizard keeps the prompt optional and pre-fills
-# whatever default the bundled example/sot.toml currently has.
 _MODEL_CONFIGURABLE_PROVIDERS: set[str] = {"openrouter", "nvidia", "openai"}
-
-# Canonical default base URL for the openai provider. Used by the wizard
-# (as the suggested default the user can keep with Enter) and by the
-# "is this provider configured?" heuristic below.
 _OPENAI_DEFAULT_URL = "https://api.openai.com/v1"
 
 
 def _ask_model(provider: str, current_default: str) -> str:
-    """Ask the user for a model name, optional, with the current default shown.
-
-    Used by the wizard for providers in `_MODEL_CONFIGURABLE_PROVIDERS`. The
-    `current_default` argument is whatever the on-disk toml (example template
-    on first run, real `sot.toml` on later runs) currently holds. Pressing
-    Enter keeps that default; typing a new value overrides it. We do not
-    validate the model name — provider APIs reject unknown ones at the first
-    request, which is the right place to surface that error.
-    """
-    console.print(f"\n[bold]Model for {provider}[/bold]")
+    console.print(f"\n[bold]Model for {escape(provider)}[/bold]")
     if current_default:
-        console.print(f"  default: [yellow]{current_default}[/yellow]")
+        console.print(f"  default: [yellow]{escape(current_default)}[/yellow]")
         entered = _ask(
             "Press Enter to keep the default, or type a model name: "
         ).strip()
@@ -907,18 +732,10 @@ def _ask_model(provider: str, current_default: str) -> str:
 
 
 def _ask_openai_url() -> str:
-    """Ask for the base URL of the openai (or OpenAI-compatible) provider.
-
-    Mirrors the UX of `_ask_local_url` but skips the host/port helpers because
-    the canonical OpenAI endpoint is a full URL. The user presses Enter to keep
-    the default, or pastes a custom URL (e.g. an internal gateway or any other
-    OpenAI-compatible service). Trailing slashes are stripped and the ``/v1``
-    suffix is appended automatically when missing.
-    """
     console.print(
         "\n[bold]Base URL for openai (or any OpenAI-compatible API)[/bold]"
     )
-    console.print(f"  default: [yellow]{_OPENAI_DEFAULT_URL}[/yellow]")
+    console.print(f"  default: [yellow]{escape(_OPENAI_DEFAULT_URL)}[/yellow]")
     while True:
         entered = _ask(
             "Press Enter to keep the default, or paste a custom URL: "
@@ -935,16 +752,7 @@ def _ask_openai_url() -> str:
 
 
 def _ask_local_url(provider: str) -> str:
-    """Build the base URL for a local provider via a 3-way selector.
-
-    The user picks between localhost, a custom IP/hostname, or a fully
-    custom URL (useful for tunnels / reverse proxies where a port number
-    is meaningless). For the first two paths we ask for the port and
-    assemble ``http://{host}:{port}/v1`` ourselves. For path 3 we accept
-    the URL the user provides and only normalize trailing slashes plus
-    the ``/v1`` suffix that the OpenAI-compatible adapter expects.
-    """
-    console.print(f"\n[bold]Where is the {provider} server running?[/bold]")
+    console.print(f"\n[bold]Where is the {escape(provider)} server running?[/bold]")
     console.print("  1. localhost  [yellow](default)[/yellow]")
     console.print("  2. Custom IP / hostname")
     console.print("  3. Custom URL (tunnel, reverse proxy, etc.)")
@@ -972,23 +780,17 @@ def _ask_local_url(provider: str) -> str:
             if not (url.startswith("http://") or url.startswith("https://")):
                 console.print("[red]URL must start with http:// or https://.[/red]")
                 continue
-            # Normalize: strip trailing slashes and ensure the /v1 suffix
-            # the OpenAI-compatible adapter expects. Users that pasted
-            # https://lms.story-studio.ai/ get auto-promoted to
-            # https://lms.story-studio.ai/v1 without surprises.
             url = url.rstrip("/")
             if not url.endswith("/v1"):
                 url = f"{url}/v1"
             return url
-        console.print(f"[red]Invalid choice: {choice!r}[/red]")
+        console.print(f"[red]Invalid choice: {escape(choice)}[/red]")
 
-    # Reached only by paths 1 and 2 — ask for the port and build the URL.
     port = _ask_local_port(provider)
     return f"http://{host}:{port}/v1"
 
 
 def _ask_local_port(provider: str) -> str:
-    """Ask for the port of a local provider with a sensible default."""
     default_port = _LOCAL_DEFAULT_PORTS.get(provider, "")
     suffix = f" (leave blank for {default_port})" if default_port else ""
     while True:
@@ -997,7 +799,7 @@ def _ask_local_port(provider: str) -> str:
             return default_port
         if port_input.isdigit() and 0 < int(port_input) < 65536:
             return port_input
-        console.print(f"[red]Invalid port: {port_input!r}[/red]")
+        console.print(f"[red]Invalid port: {escape(port_input)}[/red]")
 
 
 # ── TOML field insertion helper ─────────────────────────────────────────
@@ -1006,13 +808,6 @@ def _ask_local_port(provider: str) -> str:
 def _set_toml_string_field(
     toml_path: Path, section_header: str, field: str, new_value: str
 ) -> bool:
-    """Update a string field if it exists, otherwise insert it at the end of
-    the target section. Differs from `_update_toml_string_field` only in the
-    insert behavior — the line-rewriting path is identical and reused below.
-
-    Used for any string-valued field that may be missing from the bundled
-    example templates and needs to be inserted on demand.
-    """
     if _update_toml_string_field(toml_path, section_header, field, new_value):
         return True
 
@@ -1029,9 +824,6 @@ def _set_toml_string_field(
     if section_idx is None:
         return False
 
-    # Walk to the next `[section]` header (or EOF) and back up over any
-    # trailing blank lines so the new field lands right after the last
-    # populated line of this section.
     insert_at = len(lines)
     for j in range(section_idx + 1, len(lines)):
         if _extract_section_header(lines[j]) is not None:
@@ -1048,17 +840,6 @@ def _set_toml_string_field(
 def _set_toml_bool_field(
     toml_path: Path, section_header: str, field: str, value: bool
 ) -> bool:
-    """Set or insert ``field = true|false`` (boolean literal, no quotes) inside
-    ``section_header``. Idempotent.
-
-    If the field already exists as a boolean inside the target section, the line
-    is rewritten in place (preserving indent and any trailing comment).
-    Otherwise the field is inserted at the end of the section. Comments and
-    whitespace elsewhere in the file are preserved.
-
-    Used to write the ``configured = true`` marker the runtime checks to decide
-    whether to skip the per-provider mini-wizard.
-    """
     try:
         text = toml_path.read_text(encoding="utf-8")
     except OSError:
@@ -1066,7 +847,6 @@ def _set_toml_bool_field(
     lines = text.split("\n")
     literal = "true" if value else "false"
 
-    # Pass 1 — rewrite in place when the field already exists as a boolean.
     in_target = False
     pattern = re.compile(rf'^(\s*){re.escape(field)}\s*=\s*(?:true|false)(.*)$')
     for i, line in enumerate(lines):
@@ -1082,8 +862,6 @@ def _set_toml_bool_field(
                 toml_path.write_text("\n".join(lines), encoding="utf-8")
                 return True
 
-    # Pass 2 — section exists but field is missing: insert before the next
-    # section header, after the last populated line of this one.
     section_idx: int | None = None
     for i, line in enumerate(lines):
         if _extract_section_header(line) == section_header:
@@ -1108,8 +886,6 @@ def _set_toml_bool_field(
 def _read_toml_bool(
     toml_path: Path, section_path: list[str], field: str, default: bool = False
 ) -> bool:
-    """Read a boolean field from a nested TOML section. Returns ``default`` on
-    any error (file missing, parse failure, missing section, wrong type)."""
     try:
         with toml_path.open("rb") as handle:
             data: Any = tomllib.load(handle)
@@ -1130,35 +906,18 @@ def _read_toml_bool(
 
 
 def _is_provider_configured(provider: str, sot_toml: Path) -> bool:
-    """Single-signal check: was this provider marked as configured?
-
-    Returns True iff the provider's ``[providers.X]`` section in ``sot.toml``
-    contains ``configured = true``. The marker is written by
-    ``_first_run_setup`` and ``_configure_provider_credentials`` after the user
-    successfully completes the wizard for that provider. Anything else
-    (missing field, ``configured = false``, manual edits to base_url/api_key)
-    is treated as "not configured" and triggers the mini-wizard the next time
-    the user picks the provider in the selector.
-    """
     return _read_toml_bool(sot_toml, ["providers", provider], "configured", default=False)
 
 
 def _configure_provider_credentials(
     provider: str, sot_toml: Path, sot_keys_toml: Path
 ) -> None:
-    """Run the per-provider key + base_url flow when the user picks an
-    unconfigured provider from the selector.
-
-    Mirrors steps 4–5 of ``_first_run_setup`` but writes to disk immediately,
-    since the toml files already exist at this point. Marks the provider as
-    configured at the end so subsequent launches go straight into the session.
-    """
     is_local = provider in {"lmstudio", "ollama"}
     key_optional = provider in _OPTIONAL_KEY_PROVIDERS
 
     console.print()
     console.print(
-        f"[bold yellow]The {provider} provider has not been configured yet — "
+        f"[bold yellow]The {escape(provider)} provider has not been configured yet — "
         f"let's set it up.[/bold yellow]"
     )
 
@@ -1171,7 +930,7 @@ def _configure_provider_credentials(
             key_input = _ask(f"\nAPI key for {provider}: ").strip()
             if key_input:
                 break
-            console.print(f"[red]An API key is required for {provider}.[/red]")
+            console.print(f"[red]An API key is required for {escape(provider)}.[/red]")
 
     _update_toml_string_field(sot_keys_toml, f"[providers.{provider}]", "api_key", key_input)
 
@@ -1196,11 +955,11 @@ def _configure_provider_credentials(
 
     final_url = _read_toml_string(sot_toml, ["providers", provider], "base_url")
     final_model = _read_toml_string(sot_toml, ["providers", provider], "model")
-    console.print(f"\n[bold green]{provider.upper()} configured.[/bold green]\n")
-    console.print(f"  [bold]provider[/bold]  [bold yellow]{provider.upper()}[/bold yellow]")
-    console.print(f"  [bold]route[/bold]     [yellow]{final_url}[/yellow]")
+    console.print(f"\n[bold green]{escape(provider.upper())} configured.[/bold green]\n")
+    console.print(f"  [bold]provider[/bold]  [bold yellow]{escape(provider.upper())}[/bold yellow]")
+    console.print(f"  [bold]route[/bold]     [yellow]{escape(final_url)}[/yellow]")
     if final_model:
-        console.print(f"  [bold]model[/bold]     [yellow]{final_model}[/yellow]")
+        console.print(f"  [bold]model[/bold]     [yellow]{escape(final_model)}[/yellow]")
     console.print()
 
 
@@ -1208,8 +967,6 @@ def _configure_provider_credentials(
 
 
 def _dispatch(args: Namespace) -> int:
-    # First-run check: only when no explicit --config was passed and the
-    # interpreter is attached to a TTY (so we don't block automation/sub-agents).
     if not args.config:
         first_run_root = _detect_first_run_root()
         if first_run_root is not None:
@@ -1220,24 +977,10 @@ def _dispatch(args: Namespace) -> int:
                 )
                 return 1
             chosen = _first_run_setup()
-            # Wire the chosen provider into the args so the rest of the
-            # dispatch path treats this run as if --provider had been passed.
-            # We assign unconditionally (Namespace allows arbitrary setattr)
-            # because when sot-cli is invoked with zero arguments, args.command
-            # ends up None and the prompt subparser never gets a chance to
-            # register the `provider` attribute on the Namespace — without
-            # this assignment the post-bootstrap selector fires a second time.
             args.provider = chosen
 
     runtime = bootstrap_runtime(args.config)
 
-    # Provider selector for fresh interactive sessions when --provider was not
-    # passed and we're not resuming an existing session by ID. We honor the
-    # toml's primary_provider as the highlighted default. If the user picks a
-    # provider that has not been marked as configured (no `configured = true`
-    # in its `[providers.X]` section) we drop into the per-provider
-    # mini-wizard before bringing up the session, so the first interaction
-    # with that provider always collects the credentials it needs.
     if (
         args.command in {None, "prompt", "chat"}
         and not getattr(args, "provider", None)
@@ -1256,10 +999,6 @@ def _dispatch(args: Namespace) -> int:
             sot_keys_toml = sot_toml.with_name("sot.keys.toml")
             if not _is_provider_configured(chosen, sot_toml):
                 _configure_provider_credentials(chosen, sot_toml, sot_keys_toml)
-                # The toml on disk just changed; rebuild runtime so the
-                # in-memory ProviderConfig (api_key, base_url, …) reflects
-                # the values we just wrote. MCP isn't started yet at this
-                # point, so dropping the previous AppRuntime is safe.
                 runtime = bootstrap_runtime(args.config)
 
     async def _run_with_cleanup():
@@ -1295,7 +1034,7 @@ def _dispatch(args: Namespace) -> int:
             session_id=args.session_id, target_path=args.target,
             label=args.label, recursive=not args.non_recursive,
         )
-        console.print(f"[green]Attached to SoT in session {record.id}[/green]")
+        console.print(f"[green]Attached to SoT in session {escape(record.id)}[/green]")
         return 0
 
     if args.command == "sot_show":
@@ -1306,13 +1045,13 @@ def _dispatch(args: Namespace) -> int:
         ref = args.ref
         try:
             record, removed = runtime.sessions.remove_source_entry(args.session_id, entry_id=ref)
-            console.print(f"[green]Removed '{removed.label}' ({removed.id}) from SoT.[/green]")
+            console.print(f"[green]Removed '{escape(removed.label)}' ({escape(removed.id)}) from SoT.[/green]")
         except FileNotFoundError:
             try:
                 record, removed = runtime.sessions.remove_source_entry(args.session_id, path=ref)
-                console.print(f"[green]Removed '{removed.label}' ({removed.id}) from SoT.[/green]")
+                console.print(f"[green]Removed '{escape(removed.label)}' ({escape(removed.id)}) from SoT.[/green]")
             except FileNotFoundError:
-                console.print(f"[red]Error: No entry with ID or path '{ref}' in session {args.session_id}.[/red]")
+                console.print(f"[red]Error: No entry with ID or path '{escape(ref)}' in session {escape(args.session_id)}.[/red]")
                 return 1
         return 0
 
@@ -1329,7 +1068,6 @@ def _build_parser() -> ArgumentParser:
 
     _PROVIDER_CHOICES = ["lmstudio", "openrouter", "openai", "xai", "ollama", "nvidia"]
 
-    # prompt — main interactive mode
     prompt = subparsers.add_parser("prompt", help="Start or resume an interactive session")
     prompt.add_argument("session_id", nargs="?", default=None, help="Resume an existing session by ID")
     prompt.add_argument("--title", default=None, help="Title for the new session")
@@ -1337,7 +1075,6 @@ def _build_parser() -> ArgumentParser:
     prompt.add_argument("--model", default=None)
     prompt.add_argument("--no-tools", action="store_true", help="Plain chat without tool loop")
 
-    # chat — alias for prompt
     chat = subparsers.add_parser("chat", help="Alias for prompt")
     chat.add_argument("session_id", nargs="?", default=None)
     chat.add_argument("--title", default=None)
@@ -1345,7 +1082,6 @@ def _build_parser() -> ArgumentParser:
     chat.add_argument("--model", default=None)
     chat.add_argument("--no-tools", action="store_true")
 
-    # command — one-shot turn for multi-agent / automation
     cmd = subparsers.add_parser("command", help="Run a single turn (multi-agent / automation)")
     cmd.add_argument("session_id", help="Session ID to run against")
     cmd.add_argument("prompt", help="The prompt to send")
@@ -1358,26 +1094,21 @@ def _build_parser() -> ArgumentParser:
         help="Disable the delegate_task tool to prevent infinite recursion",
     )
 
-    # run_task — primitive to execute a previously-created agent session
     run_task = subparsers.add_parser("run_task", help="Run an agent by ID inside the sessions directory (agent_N)")
     run_task.add_argument("agent_id", help="Agent ID to run (e.g. agent_1)")
     run_task.add_argument("prompt", help="The task prompt")
 
-    # status — list sessions
     subparsers.add_parser("status", help="List sessions")
 
-    # sot_attach — add file/dir to session SoT
     sot_a = subparsers.add_parser("sot_attach", help="Attach a path to a session's Source of Truth")
     sot_a.add_argument("session_id")
     sot_a.add_argument("target", help="File or directory path to attach")
     sot_a.add_argument("--label", default=None)
     sot_a.add_argument("--non-recursive", action="store_true")
 
-    # sot_show — list SoT entries
     sot_s = subparsers.add_parser("sot_show", help="Show Source of Truth entries for a session")
     sot_s.add_argument("session_id")
 
-    # sot_delete — remove entry from SoT
     sot_d = subparsers.add_parser("sot_delete", help="Remove an entry from the Source of Truth")
     sot_d.add_argument("session_id")
     sot_d.add_argument("ref", help="Short ID or full path of the entry to remove")
@@ -1404,11 +1135,11 @@ def _print_status(runtime: AppRuntime) -> None:
 
     for record in records:
         table.add_row(
-            record.id,
-            record.title,
-            record.provider,
-            record.model,
-            record.updated_at,
+            escape(record.id),
+            escape(record.title),
+            escape(record.provider),
+            escape(record.model),
+            escape(record.updated_at),
             str(len(record.source_entries)),
         )
 
@@ -1422,16 +1153,16 @@ def _print_status(runtime: AppRuntime) -> None:
 def _print_sot(runtime: AppRuntime, session_id: str) -> None:
     record = runtime.sessions.load(session_id)
     if not record.source_entries:
-        console.print(f"[dim]No SoT entries in session {session_id}.[/dim]")
+        console.print(f"[dim]No SoT entries in session {escape(session_id)}.[/dim]")
         return
 
-    table = Table(title=f"Source of Truth — {session_id}")
+    table = Table(title=f"Source of Truth — {escape(session_id)}")
     table.add_column("ID", style="cyan")
     table.add_column("Type", style="magenta")
     table.add_column("Path / Ref", style="green")
 
     for entry in record.source_entries:
-        table.add_row(entry.id, entry.kind, entry.value)
+        table.add_row(escape(entry.id), escape(entry.kind), escape(entry.value))
 
     console.print(table)
 
@@ -1471,11 +1202,9 @@ async def _run_command_turn(
     
     result = await run_tool_loop(runtime, request, console, conversation_state=conversation_state)
     
-    
     turn_duration = time.perf_counter() - start_time
 
     if result.usage:
-        # Leer el estado de los agentes
         agents_dir = runtime.paths.sessions_dir / session_id / "agents"
         agent_statuses = []
         if agents_dir.exists():
@@ -1491,7 +1220,7 @@ async def _run_command_turn(
         usage_table = Table(title="Turn Summary & Usage")
         usage_table.add_column("Metric")
         usage_table.add_column("Value", justify="right")
-        usage_table.add_row("Session ID", session_id)
+        usage_table.add_row("Session ID", escape(session_id))
 
         main_tokens = result.usage.get("total_tokens", 0) - result.usage.get("delegated_total_tokens", 0)
         total_tokens = result.usage.get("total_tokens", 0)
@@ -1516,7 +1245,7 @@ async def _run_command_turn(
             label = "Context Limit (Allocated)" if adapter.capability.allocated_context_length else "Context Limit (Max)"
             
             usage_table.add_row(
-                label,
+                escape(label),
                 f"[{color}]{bar} {pct}% ({int(latest_prompt_tokens)}/{ctx_len})[/{color}]",
             )
             
@@ -1534,7 +1263,7 @@ async def _run_command_turn(
             usage_table.add_row("SoT Tracked Files", "Always updated in real time => " + str(len(sot_files)), style="bold magenta")
             for fpath in sorted(sot_files):
                 fname = Path(fpath).name
-                usage_table.add_row(f"  📄 {fname}", "[dim]in context[/dim]")
+                usage_table.add_row(f"  📄 {escape(fname)}", "[dim]in context[/dim]")
             
         if agent_statuses:
             try:
@@ -1544,9 +1273,8 @@ async def _run_command_turn(
             usage_table.add_row("Agents Used", str(len(agent_statuses)))
             for agent_name, status in agent_statuses:
                 color = "green" if status.upper() == "SUCCESS" else "red"
-                usage_table.add_row(f"  {agent_name}", f"[{color}]{status}[/{color}]")
+                usage_table.add_row(escape(f"  {agent_name}"), f"[{color}]{escape(str(status))}[/{color}]")
                 
-        
         try:
             usage_table.add_section()
         except Exception:
@@ -1554,20 +1282,16 @@ async def _run_command_turn(
             
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        
         h = int(turn_duration // 3600)
         m = int((turn_duration % 3600) // 60)
         s = turn_duration % 60
         duration_str = f"{h:02d}:{m:02d}:{s:06.3f}" if h > 0 else f"{m:02d}:{s:06.3f}"
         
-        usage_table.add_row("Timestamp", now_str)
-        usage_table.add_row("Turn Duration", duration_str, style="bold yellow")
+        usage_table.add_row("Timestamp", escape(now_str))
+        usage_table.add_row("Turn Duration", escape(duration_str), style="bold yellow")
 
         console.print(usage_table)
 
-        # Persist a compact snapshot of THIS turn as `last_turn_metadata`, to be
-        # injected as a `CURRENT METADATA` user message between SoT and the next
-        # user prompt in the following turn. Ephemeral: never enters chat_history.
         meta_snapshot: dict[str, Any] = {
             "Session ID": session_id,
             "Main Agent Tokens": main_tokens,
@@ -1588,11 +1312,6 @@ async def _run_command_turn(
         meta_snapshot["launch_context"] = detect_launch_context()
         conversation_state.last_turn_metadata = meta_snapshot
 
-        # Build the rich render bundle — full file list, agent statuses, raw
-        # context numbers — so a resumed session can rebuild this exact table
-        # (bar, per-file rows, per-agent rows). These fields are deliberately
-        # kept OUT of meta_snapshot to avoid bloating the CURRENT METADATA
-        # block injected to the model on the next turn.
         render_extras: dict[str, Any] = {
             "sot_files": sorted(sot_files) if sot_files else [],
             "agents": [list(t) for t in agent_statuses] if agent_statuses else [],
@@ -1607,9 +1326,6 @@ async def _run_command_turn(
                 else "Context Limit (Max)"
             )
 
-        # Persist on disk so a resumed session can replay this exact snapshot
-        # in its banner AND seed the next turn's CURRENT METADATA injection
-        # without re-running the model.
         _save_last_turn_metadata(
             runtime.paths.sessions_dir / session_id,
             meta_snapshot,
@@ -1620,13 +1336,10 @@ async def _run_command_turn(
 
 
 async def _run_task(runtime: AppRuntime, agent_id: str, prompt: str) -> int:
-    """Headless executor that ensures request.json and response.md are created."""
     try:
-        # 1. Load the agent session (SessionStore should point to SOT_SESSIONS_DIR)
         record = runtime.sessions.load(agent_id)
         agent_dir = runtime.sessions.sessions_dir / agent_id
 
-        # 2. Prepare request with an empty SourceBundle
         bundle = SourceBundle()
         request = prepare_turn_request(
             config=runtime.config,
@@ -1637,9 +1350,7 @@ async def _run_task(runtime: AppRuntime, agent_id: str, prompt: str) -> int:
             disable_delegation=True,
         )
 
-        # 3. Execute the tool loop in task mode
         result = await run_tool_loop(runtime, request, console, is_task=True)
-        # If run_tool_loop signals an error (instead of raising), preserve usage but mark status
         if getattr(result, "is_error", False):
             status, result_text, error_text = "error", "", getattr(result, "text", "")
         else:
@@ -1649,7 +1360,6 @@ async def _run_task(runtime: AppRuntime, agent_id: str, prompt: str) -> int:
         status, result_text, error_text = "error", "", str(e)
         usage = {}
 
-    # 4. Write response.md (parent session dir is the parent of the SessionStore dir)
     from sot_cli.tools.session.delegate import _write_response_md
     parent_session_dir = runtime.sessions.sessions_dir.parent
     _write_response_md(parent_session_dir, agent_id, status, prompt, result_text, usage, error_text)
@@ -1670,17 +1380,13 @@ async def _run_prompt(
     if session_id:
         record = runtime.sessions.load(session_id)
 
-        # Interactive provider selector when resuming from a TTY without an
-        # explicit --provider flag. Lets the user hot-swap providers between
-        # turns (e.g. local lmstudio → openrouter when the local box runs out
-        # of horsepower) without editing sot.toml or the session file.
         if not provider_name and sys.stdin.isatty():
             available = [name for name, cfg in runtime.config.providers.items() if cfg.enabled]
             if len(available) > 1:
                 console.print(
-                    f"\n[dim]Resuming session [/dim][bold]{record.id}[/bold] "
+                    f"\n[dim]Resuming session [/dim][bold]{escape(record.id)}[/bold] "
                     f"[dim](current provider: [/dim]"
-                    f"[bold yellow]{record.provider}[/bold yellow][dim])[/dim]"
+                    f"[bold yellow]{escape(record.provider)}[/bold yellow][dim])[/dim]"
                 )
                 provider_name = _select_provider_interactive(available, current_default=record.provider)
 
@@ -1691,12 +1397,6 @@ async def _run_prompt(
         if model_override:
             updated_model = model_override
         elif provider_changed:
-            # When switching providers, the old provider's model name is
-            # meaningless for the new one (e.g. an auto-resolved lmstudio
-            # model id won't exist on openrouter), so we always take the
-            # NEW provider's configured model from sot.toml. lmstudio /
-            # ollama are allowed to leave it empty — their adapters
-            # auto-resolve at runtime.
             updated_model = provider_config.model
             if not updated_model and updated_provider not in {"lmstudio", "ollama"}:
                 raise ValueError(
@@ -1712,15 +1412,11 @@ async def _run_prompt(
         update_kwargs: dict[str, Any] = {}
         if provider_changed:
             update_kwargs["provider"] = updated_provider
-            # Drop per-session overrides captured against the OLD provider's
-            # config (e.g. lmstudio/ollama may have stamped temperature and
-            # max_output_tokens from their local server's profile). Resetting
-            # to None forces prompting.prepare_turn_request to fall back to
-            # the NEW provider's [providers.X] defaults from sot.toml so the
-            # request stays valid (e.g. an output cap that exceeds a remote
-            # model's context window won't leak across).
-            update_kwargs["temperature"] = None
-            update_kwargs["max_output_tokens"] = None
+        # Always reset temperature/max_output_tokens to None so they
+        # dynamically inherit from sot.toml on each resume, unless the
+        # model explicitly overrides them via update_session.
+        update_kwargs["temperature"] = None
+        update_kwargs["max_output_tokens"] = None
         if updated_model != record.model:
             update_kwargs["model"] = updated_model
 
@@ -1737,8 +1433,8 @@ async def _run_prompt(
             session_title,
             provider=provider,
             model=model,
-            temperature=provider_config.temperature,
-            max_output_tokens=provider_config.max_output_tokens,
+            temperature=None,
+            max_output_tokens=None,
         )
 
     active_provider = record.provider
@@ -1753,7 +1449,6 @@ async def _run_prompt(
 
     start_now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # ── Build the startup banner ──
     logo = (
         "[bold cyan]"
         " ▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄      ▄▄▄▄▄▄▄  ▄        ▄▄▄▄▄▄▄ \n"
@@ -1768,19 +1463,17 @@ async def _run_prompt(
         "[/bold cyan]"
     )
 
-    # Session & model info
     provider_base_url = runtime.config.provider(active_provider).base_url
-    line_provider = f"[bold white]provider[/bold white] [bold yellow]{active_provider.upper()}[/bold yellow]"
-    line_session = f"[bold white]session[/bold white]  {record.id}"
-    line_route = f"[bold white]route[/bold white]    {provider_base_url}" if provider_base_url else ""
-    line_model = f"[bold white]model[/bold white]    {active_model}"
+    line_provider = f"[bold white]provider[/bold white] [bold yellow]{escape(active_provider.upper())}[/bold yellow]"
+    line_session = f"[bold white]session[/bold white]  {escape(record.id)}"
+    line_route = f"[bold white]route[/bold white]    {escape(provider_base_url)}" if provider_base_url else ""
+    line_model = f"[bold white]model[/bold white]    {escape(active_model)}"
     if any(k in active_model.lower() for k in ["uncensored", "uncensor", "abliterated", "obliterated", "nsfw"]) and "😎" not in active_model:
         line_model += " 😎"
-    line_time = f"[bold white]started[/bold white]  {start_now_str}"
-    line_stats = f"[bold white]specs[/bold white]    {stats_line}" if stats_line else ""
-    line_caps = f"[bold white]caps[/bold white]     {caps_line} | tools={'off' if no_tools else 'on'}" if caps_line else f"[bold white]tools[/bold white]    {'off' if no_tools else 'on'}"
+    line_time = f"[bold white]started[/bold white]  {escape(start_now_str)}"
+    line_stats = f"[bold white]specs[/bold white]    {escape(stats_line)}" if stats_line else ""
+    line_caps = f"[bold white]caps[/bold white]     {escape(caps_line)} | tools={'off' if no_tools else 'on'}" if caps_line else f"[bold white]tools[/bold white]    {'off' if no_tools else 'on'}"
 
-    # Host environment info
     os_name = _normalize_os_name(platform.system()) or "Unknown"
     os_release = platform.release() or ""
     arch = _normalize_arch(platform.machine()) or ""
@@ -1806,11 +1499,10 @@ async def _run_prompt(
         host_parts.append(hostname)
     if username:
         host_parts.append(f"user={username}")
-    line_host = f"[bold white]host[/bold white]     {' | '.join(p for p in host_parts if p)}"
-    line_shell = f"[bold white]shell[/bold white]    {shell}"
-    line_cwd = f"[bold white]cwd[/bold white]      {cwd}" if cwd else ""
+    line_host = f"[bold white]host[/bold white]     {escape(' | '.join(p for p in host_parts if p))}"
+    line_shell = f"[bold white]shell[/bold white]    {escape(shell)}"
+    line_cwd = f"[bold white]cwd[/bold white]      {escape(cwd)}" if cwd else ""
 
-    # Assemble banner
     banner_lines = [logo, ""]
     for line in [line_provider, line_session, line_route, line_model, line_time, line_stats, line_caps, "", line_host, line_shell, line_cwd]:
         if line or line == "":
@@ -1855,15 +1547,9 @@ async def _run_prompt(
 
     def _handle_sigint(_signum, _frame) -> None:
         nonlocal current_turn_task, turn_interrupt_requested
-        # Priority 1: if a foreground run_command is currently running, kill
-        # that child (and its process group) but let the model's turn keep
-        # going. This handles stuck commands without losing turn progress —
-        # the tool returns with status=stopped, interrupted_by_user=True and
-        # the model decides what to do next.
         try:
             if try_interrupt_active_foreground():
                 try:
-                    # Raw ANSI yellow to stay signal-safe (avoid rich's locks).
                     sys.stderr.write(
                         "\n\x1b[33mForeground run_command interrupted by user (Ctrl+C). "
                         "Model will continue.\x1b[0m\n"
@@ -1874,7 +1560,6 @@ async def _run_prompt(
                 return
         except Exception:
             pass
-        # Priority 2: no foreground command in flight — cancel the whole turn.
         if current_turn_task is not None and not current_turn_task.done():
             turn_interrupt_requested = True
             current_turn_task.cancel()
@@ -1885,7 +1570,6 @@ async def _run_prompt(
 
     prompt_session = PromptSession(key_bindings=kb, multiline=True)
 
-    # Try to resume conversation from the persisted session JSON files
     session_state = ConversationState()
     session_dir = runtime.paths.sessions_dir / record.id
     loaded_history = _load_chat_history_from_request_jsons(session_dir)
@@ -1896,11 +1580,6 @@ async def _run_prompt(
     if loaded_sot is not None:
         session_state.sot = loaded_sot
 
-    # Restore the previous turn's Summary so the user sees "where we left off"
-    # AND so the next turn's CURRENT METADATA injection chain stays coherent.
-    # The wrapper splits the slim snapshot (used to seed the model-bound
-    # CURRENT METADATA block) from the rich render bundle (file list, agent
-    # statuses, raw context numbers) needed to rebuild the table 1:1.
     loaded_meta = _load_last_turn_metadata(session_dir)
     if loaded_meta:
         loaded_snapshot = loaded_meta.get("snapshot") or {}
@@ -1914,9 +1593,6 @@ async def _run_prompt(
             try:
                 prompt = await prompt_session.prompt_async(
                     HTML("<b><cyan>you&gt;</cyan></b> "),
-                    # No visible continuation prefix on multiline input —
-                    # selecting and copying multi-line prompts now yields
-                    # only the user's text, no leading "... " markers.
                     prompt_continuation="",
                 )
             except (EOFError, KeyboardInterrupt):
@@ -1945,10 +1621,7 @@ async def _run_prompt(
                     raise
                 console.print("\n[bold yellow]Turn aborted by user (Ctrl+C).[/bold yellow]")
             except Exception as exc:
-                # --- NUEVO BLOQUE: BLINDAJE DEL SISTEMA ---
-                # Si falla la red, el proveedor da error 500, o hay un bug crítico,
-                # lo mostramos en rojo pero NO rompemos el bucle.
-                error_console.print(f"\n[bold red]System Error:[/bold red] {exc}")
+                error_console.print(f"\n[bold red]System Error:[/bold red] {escape(str(exc))}")
                 console.print("[dim]The session is still active. You can try again or change your prompt.[/dim]")
             finally:
                 current_turn_task = None

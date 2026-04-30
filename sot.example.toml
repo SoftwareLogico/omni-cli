@@ -1,78 +1,184 @@
-# Rename this file to sot.toml
-# This file should be in .gitignore so your keys never leak.
+# ─────────────────────────────────────────────────────────────────────────────
+#  sot-cli  —  Configuration File
+# ─────────────────────────────────────────────────────────────────────────────
+#  Rename this file to `sot.toml` and fill in your provider details.
+#  API keys go in `sot.keys.toml` (separate file, never committed).
+#
+#  Every setting here has a full explanation in ARCHITECTURE.md.
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  [app]              General application settings
+# ─────────────────────────────────────────────────────────────────────────────
 
 [app]
-name = "sot-cli"
-data_dir = ".sot-cli"
+name     = "sot-cli"
+data_dir = ".sot-cli"    # where sessions, logs, and metadata are stored
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  [runtime]           Which provider to use by default
+# ─────────────────────────────────────────────────────────────────────────────
 
 [runtime]
-primary_provider = "ollama"
+primary_provider = "ollama"   # fallback when no --provider flag is given
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  [tools]             Fine-tune how the AI uses its tools
+# ─────────────────────────────────────────────────────────────────────────────
+#  Each value below is a sensible default. Tweak as you see fit.
+#  Full documentation: ARCHITECTURE.md → "[tools] reference".
+# ─────────────────────────────────────────────────────────────────────────────
 
 [tools]
-# Tool-output character ceiling: any tool result longer than this is truncated before reaching the model.
-# Protects the context window from a single noisy command (long log dumps, recursive listings, etc.).
-output_limit = 12000
-# Default wall-clock timeout (seconds) for `run_command` foreground calls when the model omits `timeout_seconds`.
-# The model can override per call. Increase if your typical commands legitimately run longer.
-default_command_timeout_seconds = 180
-# Byte threshold used by `read_files` to detect binary files: it inspects this many bytes
-# at the start of the file and refuses to ingest non-UTF8 content beyond that boundary.
-binary_check_size = 8192
-# Stream the model's reasoning/thinking tokens to the terminal as they arrive.
-# Set to false if the live reasoning trace is noisy in your terminal; the model still reasons internally.
-show_thinking = true
-# Stream raw tool-call argument chunks (and any other non-reasoning, non-text chunk) verbatim as the model
-# generates them. Disable if you prefer to see only the assembled tool call line after streaming finishes.
-show_full = true
-max_rounds = 250                  # max tool-call rounds per user prompt (boss agent)
-delegated_max_rounds = 80         # max tool-call rounds for a sub-agent
-repeat_limit = 3                 # max consecutive identical rounds before abort (boss)
-delegated_repeat_limit = 2       # max consecutive identical rounds before abort (sub-agent)
-search_default_head_limit = 200  # default max result entries returned by search_code
-search_max_line_length = 1000     # per-line truncation length inside search_code output
-search_timeout_seconds = 30      # ripgrep/python-fallback timeout for a single search_code call
-reasoning_char_budget = 10000              # hard cap on streamed reasoning chars per turn (boss); 0 disables
-delegated_reasoning_char_budget = 8000    # same cap for sub-agent turns; 0 disables
-compression_reasoning_trunc_chars = 240   # hard cap (chars) on the `reasoning` of tool-bearing assistants in CLOSED turns when the outbound payload is built; 0 disables (full reasoning round-trips). Same cap is also used for the reasoning excerpt embedded in the SYSTEM MESSAGE line that replaces successful write_file/edit_files pairs in old turns.
-# Each setting above is documented in detail in ARCHITECTURE.md → "[tools] reference" section.
 
+    # ── Output limits ──────────────────────────────────────────────────────
+
+    # Max characters from a single tool result. If a command spews 500k chars
+    # of logs, the model sees the first N chars + a "[truncated]" marker.
+    # Set to 0 to disable truncation — the model sees everything.
+    output_limit = 0
+
+    # Max seconds a `run_command` can run before it's killed (unless the model
+    # passes a different timeout). Raise this if your workflows need it.
+    default_command_timeout_seconds = 180
+
+    # When reading files, the first N bytes are inspected for binary content.
+    # Anything that isn't valid UTF-8 beyond this point is rejected, keeping
+    # garbage out of the context window. Set to 0 to skip binary detection
+    # entirely — all files are treated as text (unless they have a known
+    # binary extension like .png, .jpg).
+    binary_check_size = 0
+
+    # ── Streaming visibility ───────────────────────────────────────────────
+
+    # Show the model's internal reasoning as it arrives in the terminal?
+    # The model still reasons either way — this only controls the live view.
+    show_thinking = true
+
+    # Show raw tool-call arguments as the model generates them?
+    # Disable if you prefer a single assembled line after streaming ends.
+    show_full = true
+
+    # ── Turn limits (safety wheels) ────────────────────────────────────────
+
+    # Maximum tool-call rounds the main (boss) agent can take per prompt.
+    max_rounds = 250
+
+    # Same thing, but for sub-agents spawned via `delegate_task`.
+    delegated_max_rounds = 80
+
+    # How many times the boss can repeat the exact same tool call before the
+    # runtime aborts the loop. Catches "stuck-in-a-loop" failures early.
+    repeat_limit = 3
+
+    # Same thing for sub-agents. Tighter because workers should converge fast.
+    delegated_repeat_limit = 2
+
+    # ── Code search ────────────────────────────────────────────────────────
+
+    # Default max results returned by `search_code` when the model doesn't
+    # pass an explicit `head_limit`. Pass 0 to disable the cap per call.
+    search_default_head_limit = 200
+
+    # Truncate long lines in search results to this many characters.
+    search_max_line_length = 1000
+
+    # Hard timeout (seconds) for a single `search_code` call. Prevents a
+    # pathological regex from hanging the whole turn.
+    search_timeout_seconds = 30
+
+    # ── Reasoning budget ───────────────────────────────────────────────────
+
+    # Hard cap on reasoning/thinking characters per turn for the main agent.
+    # Set to 0 to disable — the model can think as much as it wants.
+    reasoning_char_budget = 0
+
+    # Same cap for sub-agents. 0 means unlimited.
+    delegated_reasoning_char_budget = 0
+
+    # ── Token economy (compression) ────────────────────────────────────────
+
+    # Max characters kept from the reasoning of tool-calling assistants in
+    # closed turns. When a past turn's assistant called tools, its reasoning
+    # is clipped to this length before being sent to the API again.
+    # Set to 0 to keep full reasoning across all turns (more tokens).
+    compression_reasoning_trunc_chars = 240
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  [providers.*]       Connect to the AI backends
+# ─────────────────────────────────────────────────────────────────────────────
+#  Each block configures one API endpoint. You can have as many as you want.
+#  Switch between them at runtime with the --provider flag or the interactive
+#  selector. API keys live in `sot.keys.toml` (one file for all keys).
+#
+#  Common fields:
+#    base_url          Full URL including "/v1" (OpenAI-compatible format).
+#    model             Model name. Empty = auto-resolve (local servers only).
+#    temperature       Sampling temperature (0.0 – 2.0). Higher = more random.
+#    max_output_tokens Max tokens the model can generate per response.
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── LM Studio (local) ──────────────────────────────────────────────────
+#  Runs fully offline on your machine. Connect to the LM Studio server.
 [providers.lmstudio]
 base_url = "http://localhost:1234/v1"
-model = "" #empty means it'll use the loaded one
-temperature = 0.6
-max_output_tokens = 8192
+model = ""                              # empty = auto-detect loaded model
+temperature = 0.7
+max_output_tokens = 32768
 
+# ── OpenRouter ─────────────────────────────────────────────────────────
+#  Gateway to hundreds of models (free & paid). Needs an API key.
 [providers.openrouter]
 base_url = "https://openrouter.ai/api/v1"
 model = "x-ai/grok-4.1-fast"
-temperature = 0.6
-max_output_tokens = 8192
-http_referer = "https://github.com/SoftwareLogico/sot-cli"
-app_title = "sot-cli"
-reasoning_effort = "medium" # options: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" — silently ignored by non-reasoning models
+temperature = 0.7
+max_output_tokens = 32768
+http_referer = "https://github.com/SoftwareLogico/sot-cli"     # for rankings
+app_title = "sot-cli"                                           # for rankings
+reasoning_effort = "medium"   # options: none | minimal | low | medium | high | xhigh
+                              # silently ignored by non-reasoning upstream models
 
+# ── NVIDIA NIM ─────────────────────────────────────────────────────────
+#  NVIDIA's hosted API for their optimized models.
 [providers.nvidia]
 base_url = "https://integrate.api.nvidia.com/v1"
 model = "qwen/qwen3-coder-480b-a35b-instruct"
-temperature = 0.6
-max_output_tokens = 8192
+temperature = 0.7
+max_output_tokens = 32768
 
+# ── Ollama (local) ─────────────────────────────────────────────────────
+#  Run models locally with Ollama. Just point to your Ollama server.
 [providers.ollama]
 base_url = "http://localhost:11434/v1"
-model = "" #empty means it'll use the loaded one
-temperature = 0.6
-max_output_tokens = 8192
+model = ""                              # empty = auto-detect loaded model
+temperature = 0.7
+max_output_tokens = 32768
 
-[providers.openai] # works with OpenAI and any OpenAI-compatible API
+# ── OpenAI (and any OpenAI-compatible API) ──────────────────────────────
+#  The real OpenAI API — or any self-hosted server that speaks the same
+#  protocol (vLLM, llama.cpp, etc.).
+[providers.openai]                      # works with any OpenAI-compatible API
 base_url = "https://api.openai.com/v1"
-model = "gpt-5.4-mini-2026-03-17" # required — set to your served model name
-temperature = 0.6
-max_output_tokens = 8192
-reasoning_effort = "medium" # options: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" — only valid for reasoning models (gpt-5/o-series); on plain gpt-4* OpenAI returns HTTP 400, comment out or delete this line for those models
+model = "gpt-5.4-mini-2026-03-17"       # required — set to your model name
+temperature = 0.7
+max_output_tokens = 32768
+reasoning_effort = "medium"   # options: none | minimal | low | medium | high | xhigh
+                              # only valid for reasoning models (gpt-5 / o-series).
+                              # For plain gpt-4* models, comment out or delete
+                              # this line — OpenAI returns HTTP 400 otherwise.
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  [mcp.servers.*]     External tools via the Model Context Protocol
+# ─────────────────────────────────────────────────────────────────────────────
+#  Add any MCP-compatible server here and its tools are automatically
+#  exposed to the AI, namespaced by server name.
+# ─────────────────────────────────────────────────────────────────────────────
 
 [mcp.servers.test]
 command = "python"
 args = ["mcps/test.py"]
-
-
-

@@ -107,7 +107,7 @@ def _split_keywords(value: str) -> list[str]:
 
 def _looks_like_text_file(path: Path) -> bool:
     try:
-        chunk = path.read_bytes()[:8192]
+        chunk = path.read_bytes()[:32768]
     except OSError:
         return False
 
