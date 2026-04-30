@@ -143,6 +143,7 @@ class TurnResult:
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
     usage: dict[str, Any] = field(default_factory=dict)
     is_error: bool = False
+    finished_reason: str = ""  # "length" if the model hit max_output_tokens
 
 
 @dataclass
@@ -278,6 +279,10 @@ async def run_single_turn(
                     _store_latest_usage_snapshot(result.usage, usage)
             elif event.type == "error":
                 raise RuntimeError(str(event.payload.get("message", "Unknown provider error")))
+            elif event.type == "finished":
+                finish_reason = event.payload.get("finish_reason", "")
+                if finish_reason:
+                    result.finished_reason = finish_reason
     finally:
         await stream.aclose()
 
@@ -290,6 +295,15 @@ async def run_single_turn(
         )
     if show_full and _tool_call_header_shown:
         _write_meta(render_state, "\x1b[2m)\x1b[0m\n", ends_on_newline=True)
+    if result.finished_reason == "length":
+        _ensure_fresh_line(render_state)
+        _write_meta(
+            render_state,
+            f"\x1b[33m⚠ Maximum output tokens reached. The response was cut off. "
+            f"Increase `max_output_tokens` in your provider config for longer responses.\x1b[0m\n",
+            ends_on_newline=True,
+        )
+
     if result.text or (show_thinking and render_state.reasoning_started):
         _ensure_fresh_line(render_state)
 
@@ -333,7 +347,6 @@ async def run_tool_loop(
             disable_delegation=request.disable_delegation,
             tools=[],
             conversation_messages=_build_payload_messages(conversation_state, request),
-            reasoning_effort=request.reasoning_effort,
             compression_reasoning_trunc_chars=request.compression_reasoning_trunc_chars,
         )
         turn_result = await run_single_turn(
@@ -407,7 +420,6 @@ async def run_tool_loop(
             disable_delegation=request.disable_delegation,
             tools=registry.schemas(),
             conversation_messages=payload_messages,
-            reasoning_effort=request.reasoning_effort,
             compression_reasoning_trunc_chars=request.compression_reasoning_trunc_chars,
         )
 
@@ -446,6 +458,25 @@ async def run_tool_loop(
         else:
             with prompt_status:
                 completion = await adapter.complete_turn(round_request)
+
+        # ── Token limit check: abort tool loop if model was cut off ──
+        if getattr(completion, "finished_reason", "") == "length":
+            console.print(
+                "[bold yellow]⚠ Token limit reached — response was cut off. "
+                "Aborting tool loop to prevent retry loop. "
+                "Increase `max_output_tokens` in your provider config.[/bold yellow]"
+            )
+            result.text = completion.text
+            result.tool_calls = []
+            result.finished_reason = "length"
+            # Still save the partial assistant message so the model knows
+            # what happened when it sees the CURRENT METADATA in the next turn.
+            assistant_message = dict(completion.assistant_message)
+            assistant_message.setdefault("role", "assistant")
+            conversation_state.chat_history.append(assistant_message)
+            if completion.usage:
+                _merge_usage_totals(result.usage, completion.usage)
+            return result
 
         # ── SoT Step 6: Clean — save assistant to permanent history (no SoT) ──
         assistant_message = dict(completion.assistant_message)
@@ -1164,6 +1195,7 @@ async def _run_streaming_round(
     _tool_call_header_shown: set[int] = set()
     reasoning_chars = 0
     reasoning_budget_tripped = False
+    _stream_finished_reason = ""
 
     stream = adapter.stream_turn(request)
     try:
@@ -1232,6 +1264,10 @@ async def _run_streaming_round(
                     _replace_usage_snapshot(usage, event_usage)
             elif event.type == "error":
                 raise RuntimeError(str(event.payload.get("message", "Unknown provider error")))
+            elif event.type == "finished":
+                finish_reason = event.payload.get("finish_reason", "")
+                if finish_reason:
+                    _stream_finished_reason = finish_reason
     finally:
         await stream.aclose()
 
@@ -1266,6 +1302,7 @@ async def _run_streaming_round(
         "text": text,
         "tool_calls": tool_calls,
         "usage": usage,
+        "finished_reason": _stream_finished_reason,
     })()
 
 

@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Literal, Protocol
 
 
-ProviderEventType = Literal["text_delta", "reasoning_delta", "tool_call", "usage", "done", "error"]
+ProviderEventType = Literal["text_delta", "reasoning_delta", "tool_call", "usage", "finished", "done", "error"]
 
 
 @dataclass
@@ -40,19 +40,17 @@ class ProviderRequest:
     disable_delegation: bool = False
     tools: list[dict[str, Any]] = field(default_factory=list)
     conversation_messages: list[dict[str, Any]] = field(default_factory=list)
-    # Reasoning effort hint relayed to the provider when supported. Only
-    # consumed by `openai` (flat `reasoning_effort` field on Chat Completions)
-    # and `openrouter` (nested `reasoning.effort` object). Ignored for every
-    # other provider to avoid sending unknown keys to OpenAI-compatible
-    # servers that reject unknown parameters with a 400. Empty / None means
-    # "do not send the parameter, let the provider use its own default".
-    reasoning_effort: str | None = None
+
     # Hard cap on characters kept from `reasoning` of tool-bearing assistant
     # messages in OLD turns when the outbound payload is built. Applied by
     # the sanitizer in `openai_compat._sanitize_messages_for_provider`. 0
     # disables the cap (full reasoning round-trips for every turn). Plumbed
     # from `[tools].compression_reasoning_trunc_chars` in sot.toml.
-    compression_reasoning_trunc_chars: int = 0
+        compression_reasoning_trunc_chars: int = 0
+
+    # OpenRouter reasoning effort — uses nested "reasoning": {"effort": "..."}
+    # Only OpenRouter supports this; OpenAI rejects it with tools.
+    reasoning_effort: str | None = None
 
 
 @dataclass

@@ -918,7 +918,7 @@ def _is_openai_reasoning_model(model: str) -> bool:
       `o4-mini`, dated variants like `o4-mini-2025-04-16`.
 
     Non-reasoning OpenAI families (`gpt-4*`, `gpt-3.5-*`, `chatgpt-4o-*`)
-    return False so they keep getting `temperature` and skip `reasoning_effort`.
+    return False so they keep getting `temperature`.
 
     Returns False for empty/None inputs and for anything that doesn't match
     the prefixes above (covers ad-hoc OpenAI-compatible deployments behind
@@ -1022,34 +1022,16 @@ def build_chat_completions_payload(request: ProviderRequest, resolved_model: str
             tools = [_sanitize_tool_schema_for_openai(t) for t in tools]
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
+    # OpenRouter reasoning effort — nested object format
+    if is_openrouter and request.reasoning_effort:
+        payload["reasoning"] = {"effort": request.reasoning_effort}
+
 
     # Reasoning effort wire format diverges per provider — and OpenAI in
     # particular rejects unknown top-level keys with HTTP 400, so we MUST NOT
     # forward this field to anyone but the two providers that document it,
     # AND only on models that actually accept it.
     #
-    # - openai      → flat top-level field:  "reasoning_effort": "<level>"
-    #                 only valid on reasoning-class models (gpt-5/o-series).
-    #                 If the user left `reasoning_effort = "..."` in the toml
-    #                 but switched the model to a non-reasoning one, we
-    #                 silently strip the param so the call doesn't 400 —
-    #                 the user can re-enable by reverting the model. The
-    #                 codebase intentionally does not use the Responses API
-    #                 to keep SoT semantics intact, so the flat field is the
-    #                 only correct shape for this adapter.
-    # - openrouter  → nested object:         "reasoning": {"effort": "<level>"}
-    #                 OpenRouter's unified parameter; silently ignored on
-    #                 non-reasoning upstreams, so it's safe to always send
-    #                 when the user sets it.
-    #
-    # Any other provider (lmstudio, ollama, nvidia, xai) gets nothing — those
-    # never advertised reasoning_effort and would either ignore or 400.
-    if request.reasoning_effort:
-        if openai_is_reasoning:
-            payload["reasoning_effort"] = request.reasoning_effort
-        elif is_openrouter:
-            payload["reasoning"] = {"effort": request.reasoning_effort}
-
     return payload
 
 
@@ -1116,6 +1098,20 @@ def _events_from_chunk(chunk: dict[str, Any]) -> list[ProviderEvent]:
         tool_calls = delta.get("tool_calls") or []
         if tool_calls:
             events.append(ProviderEvent(type="tool_call", payload={"tool_calls": tool_calls}))
+
+        # Detect abrupt stream termination: finish_reason == "length" means the
+        # model hit its max_output_tokens limit mid-response. Emit a "finished"
+        # event so the stream handlers can warn the user and abort cleanly
+        # instead of letting the model retry into an infinite loop.
+        # OpenRouter wraps native_finish_reason when the real reason differs
+        # from the standard field (e.g. finish_reason="tool_calls" but
+        # native_finish_reason="length" — model was cut off mid-tool-call).
+        finish_reason = choice.get("finish_reason")
+        native_finish_reason = choice.get("native_finish_reason")
+        if native_finish_reason:
+            events.append(ProviderEvent(type="finished", payload={"finish_reason": native_finish_reason}))
+        elif finish_reason:
+            events.append(ProviderEvent(type="finished", payload={"finish_reason": finish_reason}))
 
     return events
 

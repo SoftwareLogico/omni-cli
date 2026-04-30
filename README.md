@@ -142,7 +142,7 @@ base_url = "https://openrouter.ai/api/v1"
 model = "x-ai/grok-4.1-fast"
 temperature = 0.7
 max_output_tokens = 32768
-reasoning_effort = "medium" # silently ignored on non-reasoning upstreams
+reasoning_effort = "medium" # options: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" — silently ignored by non-reasoning upstreams
 
 [providers.lmstudio]
 base_url = "http://localhost:1234/v1"
@@ -155,7 +155,6 @@ base_url = "https://api.openai.com/v1"
 model = "gpt-5.4-mini-2026-03-17" # required — set to your served model name
 temperature = 0.7
 max_output_tokens = 32768
-reasoning_effort = "medium" # only valid for reasoning models (gpt-5/o-series)
 
 [providers.ollama]
 base_url = "http://localhost:11434/v1"
@@ -170,7 +169,7 @@ temperature = 0.7
 max_output_tokens = 32768
 ```
 
-For full per-provider field semantics (including the `reasoning_effort` wire format differences and OpenAI-specific quirks like `max_completion_tokens` and tool schema sanitization), see [ARCHITECTURE.md → Provider configuration](ARCHITECTURE.md#provider-configuration-providersx).
+For full per-provider field semantics (including OpenAI-specific quirks like `max_completion_tokens` and tool schema sanitization), see [ARCHITECTURE.md → Provider configuration](ARCHITECTURE.md#provider-configuration-providersx).
 
 ### Run the CLI with the most common parameters
 

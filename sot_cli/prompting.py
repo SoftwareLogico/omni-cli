@@ -35,12 +35,8 @@ def prepare_turn_request(
         session.max_output_tokens if session.max_output_tokens is not None else provider.max_output_tokens
     )
 
-    # Reasoning effort comes from the per-provider section in sot.toml. The
-    # config parser puts every unknown field under `provider.extra`, so this
-    # value is None unless the user explicitly sets `reasoning_effort = "..."`
-    # in `[providers.X]`. Stored verbatim — the provider adapter is the one
-    # that decides whether to relay it (and in which wire format) per
-    # provider name; non-supported providers ignore the field.
+
+    # Reasoning effort from sot.toml (OpenRouter only uses nested format)
     raw_effort = provider.extra.get("reasoning_effort")
     reasoning_effort: str | None = (
         str(raw_effort).strip() or None if raw_effort is not None else None
