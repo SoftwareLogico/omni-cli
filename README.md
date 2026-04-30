@@ -1,7 +1,7 @@
 # sot-cli 🚀 Limitless Local AI Agent
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/downloads/)
-[![Providers](https://img.shields.io/badge/Providers-OpenRouter%20%7C%20LMStudio%20%7C%20OpenAI%20%7C%20xAI%20%7C%20Ollama%20%7C%20NVIDIA-brightgreen.svg)](ARCHITECTURE.md)
+[![Providers](https://img.shields.io/badge/Providers-OpenRouter%20%7C%20LMStudio%20%7C%20OpenAI%20%7C%20Ollama%20%7C%20NVIDIA-brightgreen.svg)](ARCHITECTURE.md)
 [![Stars](https://img.shields.io/github/stars/softwarelogico/sot-cli?style=social)](https://github.com/softwarelogico/sot-cli)
 [![License](https://img.shields.io/github/license/SoftwareLogico/sot-cli?style=flat&logo=mit)](LICENSE)
 
@@ -26,7 +26,7 @@ The name `sot-cli` is a direct nod to the architectural pattern it is built arou
 - **🤖 Async Multi-Agent**: Delegate trial-and-error to cheap sub-agents (empty ctx).
 - **⚡ Batch Orchestration**: Multi-tools + bash/Python scripts in ONE turn.
 - **🔧 Full Tools**: 19 built-in (incl. unrestricted shell, regex code search, batched multi-file surgical edits) + MCP extensible.
-- **🌐 Multi-Provider**: Switch OpenRouter/LMStudio/OpenAI/xAI/Ollama/NVIDIA live.
+- **🌐 Multi-Provider**: Switch OpenRouter/LMStudio/OpenAI/Ollama/NVIDIA live.
 - **💰 Native Prompt Caching**: Payload architecture designed for prefix-matching, saving up to 50% API costs on long histories by caching static dialogue and keeping dynamic files at the bottom.
 - **🧠 Context Awareness**: Real-time context limit tracking (Allocated vs. Max) with visual terminal warnings to prevent token overflow.
 
@@ -102,7 +102,6 @@ sot-cli is compatible with any OpenAI‑compatible (OpenAI‑like) API. The foll
 - ✅ OpenRouter
 - ✅ LM Studio (local)
 - ✅ OpenAI (and any OpenAI-compatible API behind the same `openai` provider name)
-- ✅ xAI
 - ✅ Ollama (local)
 - ✅ NVIDIA
 
@@ -178,10 +177,10 @@ For full per-provider field semantics (including OpenAI-specific quirks like `ma
 sot-cli
 
 # Or override the provider explicitly
-sot-cli --provider [openrouter/lmstudio/openai/xai/ollama/nvidia]
+sot-cli --provider [openrouter/lmstudio/openai/ollama/nvidia]
 # e.g. sot-cli --provider openai
 
-sot-cli --provider [openrouter/lmstudio/openai/xai/ollama/nvidia] --model modelName
+sot-cli --provider [openrouter/lmstudio/openai/ollama/nvidia] --model modelName
 # e.g. sot-cli --provider openai --model gpt-5.4-mini-2026-03-17
 
 # Resume a previous session

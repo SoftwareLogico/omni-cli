@@ -164,7 +164,7 @@ max_output_tokens = 32768
 #  protocol (vLLM, llama.cpp, etc.).
 [providers.openai]                      # works with any OpenAI-compatible API
 base_url = "https://api.openai.com/v1"
-model = "gpt-5.4-mini-2026-03-17"       # required — set to your model name
+model = "gpt-5-nano-2025-08-07"     # required — set to your model name
 temperature = 0.7
 max_output_tokens = 32768
 

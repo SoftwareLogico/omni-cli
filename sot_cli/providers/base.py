@@ -46,7 +46,7 @@ class ProviderRequest:
     # the sanitizer in `openai_compat._sanitize_messages_for_provider`. 0
     # disables the cap (full reasoning round-trips for every turn). Plumbed
     # from `[tools].compression_reasoning_trunc_chars` in sot.toml.
-        compression_reasoning_trunc_chars: int = 0
+    compression_reasoning_trunc_chars: int = 0
 
     # OpenRouter reasoning effort — uses nested "reasoning": {"effort": "..."}
     # Only OpenRouter supports this; OpenAI rejects it with tools.

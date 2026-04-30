@@ -373,7 +373,6 @@ def _search_with_ripgrep(
     for d in VCS_DIRS:
         args.extend(["--glob", f"!{d}"])
 
-    args.extend(["--max-columns", str(max_line_length)])
 
     if multiline:
         args.extend(["-U", "--multiline-dotall"])
