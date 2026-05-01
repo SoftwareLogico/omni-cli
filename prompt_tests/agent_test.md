@@ -4,7 +4,7 @@ This benchmark validates real end-to-end execution under a non-trivial workflow.
 
 It checks whether the agent can:
 
-- Use background workers while continuing foreground steps.
+- Run parallel sub-agents while continuing its own main thread.
 - Download and verify assets.
 - Create and edit local files based on live progress.
 - Execute native OS commands and adapt if the first method fails.
@@ -16,7 +16,7 @@ Copy and paste this to the model to test that everything is working correctly:
 
 "I need a new vibe for my desktop. Please change my wallpaper to this image: 'https://wallpapercave.com/download/night-city-4k-desktop-wallpapers-wp10920086'.
 
-To keep things clean and efficient, use a background worker to handle the downloading and verifying of the image into a temporary folder.
+To keep things clean and efficient, delegate the downloading and verifying of the image into a temporary folder to a parallel sub-agent.
 
 While that is happening, create a local text file named vibe_check.txt and write down your initial strategy for changing the wallpaper on my current machine.
 

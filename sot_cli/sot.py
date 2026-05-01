@@ -467,9 +467,6 @@ def _update_single_read_result(
     if ftype in {"file_unchanged", "file_in_sot"}:
         return
 
-    if payload.get("partial") is True:
-        return
-
     content = payload.get("content")
     if isinstance(content, str):
         state.tracked_files[fpath] = content

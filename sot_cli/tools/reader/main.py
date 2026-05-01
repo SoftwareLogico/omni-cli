@@ -21,55 +21,19 @@ from sot_cli.tools.reader.notebook import read_notebook
 from sot_cli.tools.reader.pdf import read_pdf
 from sot_cli.tools.utils.formatters import _file_mtime_ns
 from sot_cli.tools.utils.path_helpers import _find_similar_file, _is_blocked_device
-from sot_cli.tools.utils.validators import _normalize_pages_argument, _normalize_positive_int, _require_string
+from sot_cli.tools.utils.validators import _normalize_pages_argument, _require_string
 
 
-def _normalize_line_range(arguments: dict[str, Any]) -> tuple[int | None, int | None]:
-    raw_start_line = arguments.get("start_line")
-    raw_end_line = arguments.get("end_line")
-    if raw_start_line is None and raw_end_line is None:
-        return None, None
-    if raw_start_line is None or raw_end_line is None:
-        raise ValueError("start_line and end_line must be provided together")
-
-    start_line = _normalize_positive_int(raw_start_line, "start_line")
-    end_line = _normalize_positive_int(raw_end_line, "end_line")
-    if end_line < start_line:
-        raise ValueError("end_line must be greater than or equal to start_line")
-    return start_line, end_line
-
-
-def _read_text_with_optional_line_range(
-    path: Path,
-    start_line: int | None,
-    end_line: int | None,
-) -> tuple[str, int, bool]:
-    if start_line is None or end_line is None:
-        content = path.read_text(encoding="utf-8")
-        total_lines = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
-        return content, total_lines, False
-
-    collected_lines: list[str] = []
-    total_lines = 0
+def _read_text_file(path: Path) -> tuple[str, int]:
     try:
-        with path.open("r", encoding="utf-8") as handle:
-            for total_lines, line in enumerate(handle, start=1):
-                if start_line <= total_lines <= end_line:
-                    collected_lines.append(line)
+        content = path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError(
             "Cannot decode file as UTF-8 text. The file may be binary. "
             "Use run_command with xxd or file to inspect it."
         ) from exc
-
-    if total_lines == 0:
-        raise ValueError("Cannot target line ranges in an empty file")
-    if end_line > total_lines:
-        raise ValueError(
-            f"Line range {start_line}-{end_line} is outside the file (total lines: {total_lines})"
-        )
-
-    return "".join(collected_lines), total_lines, True
+    total_lines = content.count("\n") + (1 if content and not content.endswith("\n") else 0)
+    return content, total_lines
 
 
 def execute_read_many_files(
@@ -232,7 +196,6 @@ def execute_read_text_file(
     raw_pages = arguments.get("pages")
     pages = _normalize_pages_argument(raw_pages)
     password: str | None = arguments.get("password")
-    start_line, end_line = _normalize_line_range(arguments)
 
     # Block device paths that would hang
     if _is_blocked_device(resolved):
@@ -256,19 +219,15 @@ def execute_read_text_file(
 
     if pages and ext not in PDF_EXTENSIONS:
         raise ValueError("The pages parameter is only valid for PDF files.")
-    if start_line is not None and ext in IMAGE_EXTENSIONS | PDF_EXTENSIONS | NOTEBOOK_EXTENSIONS | AUDIO_EXTENSIONS | VIDEO_EXTENSIONS:
-        raise ValueError("start_line and end_line are only valid for UTF-8 text files.")
 
     # ── SoT check (cross-round) ──
     # If the file is already tracked in the SoT and its disk mtime hasn't
     # changed, the model already sees it in the '=== SOURCE OF TRUTH ===' block.
-    # Return a pointer stub instead of re-reading. Only applies to full reads
-    # of plain text files (not partial ranges, not PDF pages).
+    # Return a pointer stub instead of re-reading. Only applies to plain text
+    # files (not PDF pages).
     if (
         sot_state is not None
         and file_in_sot_stub is not None
-        and start_line is None
-        and end_line is None
         and not pages
     ):
         tracked_mtimes = getattr(sot_state, "tracked_file_mtimes", None)
@@ -286,7 +245,7 @@ def execute_read_text_file(
             }
 
     # ── Cache check (same-round) ──
-    cached = read_cache.get((resolved, pages, start_line, end_line))
+    cached = read_cache.get((resolved, pages))
     if cached is not None:
         cached_modified_ns, _ = cached
         if cached_modified_ns == modified_ns:
@@ -297,7 +256,7 @@ def execute_read_text_file(
             }
 
     def _store(result: dict[str, Any]) -> dict[str, Any]:
-        read_cache[(resolved, pages, start_line, end_line)] = (modified_ns, result)
+        read_cache[(resolved, pages)] = (modified_ns, result)
         return result
 
     # ── Image ──
@@ -324,42 +283,22 @@ def execute_read_text_file(
     if ext in BINARY_EXTENSIONS or _is_probably_binary(path, binary_check_size):
         _raise_binary_error(ext, path)
 
-    content, total_lines, is_partial = _read_text_with_optional_line_range(path, start_line, end_line)
+    content, total_lines = _read_text_file(path)
 
     if not content:
-        result = {
+        return _store({
             "path": resolved,
             "warning": "The file exists but the contents are empty.",
             "content": "",
             "size_bytes": 0,
             "total_lines": total_lines,
             "modified_ns": modified_ns,
-        }
-        if is_partial:
-            result.update(
-                {
-                    "partial": True,
-                    "start_line": start_line,
-                    "end_line": end_line,
-                    "returned_lines": 0,
-                }
-            )
-        return _store(result)
+        })
 
-    result = {
+    return _store({
         "path": resolved,
         "content": content,
         "size_bytes": size_bytes,
         "total_lines": total_lines,
         "modified_ns": modified_ns,
-    }
-    if is_partial:
-        result.update(
-            {
-                "partial": True,
-                "start_line": start_line,
-                "end_line": end_line,
-                "returned_lines": content.count("\n") + (1 if content and not content.endswith("\n") else 0),
-            }
-        )
-    return _store(result)
+    })

@@ -24,12 +24,6 @@ from sot_cli.tools.session.control import (
     execute_update_session,
 )
 from sot_cli.tools.session.list_tasks import execute_list_tasks, execute_wait_task
-from sot_cli.tools.shell.manage_commands import (
-    execute_list_commands,
-    execute_read_command_output,
-    execute_stop_command,
-    execute_wait_command,
-)
 from sot_cli.tools.shell.open_path import execute_open_path
 from sot_cli.tools.schemas import get_tool_schemas
 from sot_cli.tools.shell.run_command import execute_run_command
@@ -90,11 +84,7 @@ class ToolRegistry:
             "search_code": self._search_code,
             "open_path": self._open_path,
             "run_command": self._run_command,
-            "list_commands": self._list_commands,
-            "read_command_output": self._read_command_output,
-            "wait_command": self._wait_command,
             "wait_task": self._wait_task,
-            "stop_command": self._stop_command,
             "edit_files": self._edit_files,
             "write_file": self._write_file,
             "delete_file": self._delete_file,
@@ -206,37 +196,7 @@ class ToolRegistry:
             root_dir=self.runtime.paths.root_dir,
             logs_dir=self.runtime.paths.logs_dir,
             session_id=self.session_id,
-            output_limit=self.runtime.config.tools.output_limit,
             default_command_timeout_seconds=self.runtime.config.tools.default_command_timeout_seconds,
-        )
-
-    def _list_commands(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return execute_list_commands(
-            arguments,
-            logs_dir=self.runtime.paths.logs_dir,
-            session_id=self.session_id,
-        )
-
-    def _read_command_output(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return execute_read_command_output(
-            arguments,
-            logs_dir=self.runtime.paths.logs_dir,
-            session_id=self.session_id,
-            output_limit=self.runtime.config.tools.output_limit,
-        )
-
-    def _wait_command(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return execute_wait_command(
-            arguments,
-            logs_dir=self.runtime.paths.logs_dir,
-            session_id=self.session_id,
-        )
-
-    def _stop_command(self, arguments: dict[str, Any]) -> dict[str, Any]:
-        return execute_stop_command(
-            arguments,
-            logs_dir=self.runtime.paths.logs_dir,
-            session_id=self.session_id,
         )
 
     def _open_path(self, arguments: dict[str, Any]) -> dict[str, Any]:

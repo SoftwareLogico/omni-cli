@@ -888,7 +888,7 @@ def _build_tool_result_summary(tool_result: Any) -> str:
             return f"batch read {success_count}/{result_count} ok ({error_count} errors) -> SoT updated"
 
         lines = [f"batch read {success_count}/{result_count} ok ({error_count} errors):"]
-        for item in results[:20]:
+        for item in results:
             if not isinstance(item, dict):
                 continue
             if not item.get("ok"):
@@ -899,17 +899,10 @@ def _build_tool_result_summary(tool_result: Any) -> str:
             fpath = item.get("path", "?")
             ftype = item.get("type", "text")
             if ftype == "text":
-                if item.get("partial") is True:
-                    lines.append(
-                        f"- inspected {fpath} lines {item.get('start_line', '?')}-{item.get('end_line', '?')} "
-                        f"({item.get('returned_lines', '?')} returned, file has {item.get('total_lines', '?')} lines, "
-                        f"{item.get('size_bytes', '?')} bytes)"
-                    )
-                else:
-                    lines.append(
-                        f"- read {fpath} ({item.get('total_lines', '?')} lines, "
-                        f"{item.get('size_bytes', '?')} bytes) -> SoT"
-                    )
+                lines.append(
+                    f"- read {fpath} ({item.get('total_lines', '?')} lines, "
+                    f"{item.get('size_bytes', '?')} bytes) -> SoT"
+                )
             elif ftype == "image":
                 lines.append(f"- read image {fpath} ({item.get('original_size_bytes', '?')} bytes) -> SoT")
             elif ftype == "pdf":
@@ -927,8 +920,6 @@ def _build_tool_result_summary(tool_result: Any) -> str:
             else:
                 lines.append(f"- read {fpath} type={ftype}")
 
-        if len(results) > 20:
-            lines.append(f"... and {len(results) - 20} more entries.")
         return "\n".join(lines)
 
     if name == "open_path":
@@ -998,7 +989,7 @@ def _build_tool_result_summary(tool_result: Any) -> str:
             return f"listed {fpath} (0 entries)"
 
         summary_lines = [f"listed {fpath} ({count} entries):"]
-        for entry in entries[:20]:
+        for entry in entries:
             if not isinstance(entry, dict):
                 continue
             entry_path = str(entry.get("path") or entry.get("relative_path") or entry.get("name") or "?").strip()
@@ -1011,9 +1002,6 @@ def _build_tool_result_summary(tool_result: Any) -> str:
             status_text = " [Blocked by OS]" if blocked else ""
             size_text = f"{entry_size} bytes" if isinstance(entry_size, int) else "size unknown"
             summary_lines.append(f"- {entry_path} ({entry_kind}, {size_text}){status_text}")
-
-        if count > 20:
-            summary_lines.append(f"... and {count - 20} more entries.")
 
         return "\n".join(summary_lines)
 
@@ -1054,27 +1042,27 @@ def _build_tool_result_summary(tool_result: Any) -> str:
         if len(cmd) > 80:
             cmd = cmd[:77] + "..."
         exit_code = payload.get("exit_code", "?")
-        mode = payload.get("mode", "foreground")
-        if mode == "background":
-            command_id = payload.get("command_id", "?")
-            status = payload.get("status", "starting")
-            return f"bg '{cmd}' id={command_id} status={status}"
         timed_out = payload.get("timed_out", False)
-        if timed_out:
-            return f"'{cmd}' timed out"
-
         stdout = str(payload.get("stdout", "")).strip()
         stderr = str(payload.get("stderr", "")).strip()
 
-        result_parts = [f"'{cmd}' exit={exit_code}"]
+        if timed_out:
+            timeout_limit = payload.get("timeout_seconds", "?")
+            header = f"'{cmd}' killed after timeout (limit={timeout_limit}s)"
+            stdout_label = "[stdout captured before kill]"
+            stderr_label = "[stderr captured before kill]"
+        else:
+            header = f"'{cmd}' exit={exit_code}"
+            stdout_label = "[stdout]"
+            stderr_label = "[stderr]"
+
+        result_parts = [header]
 
         if stdout:
-            stdout_excerpt = stdout[:3000] + ("\n...[stdout truncated]" if len(stdout) > 3000 else "")
-            result_parts.append(f"[stdout]\n{stdout_excerpt}")
+            result_parts.append(f"{stdout_label}\n{stdout}")
 
         if stderr:
-            stderr_excerpt = stderr[:1000] + ("\n...[stderr truncated]" if len(stderr) > 1000 else "")
-            result_parts.append(f"[stderr]\n{stderr_excerpt}")
+            result_parts.append(f"{stderr_label}\n{stderr}")
 
         if len(result_parts) == 1:
             stdout_bytes = payload.get("stdout_bytes", 0)
@@ -1082,46 +1070,6 @@ def _build_tool_result_summary(tool_result: Any) -> str:
             result_parts.append(f"stdout={stdout_bytes}b stderr={stderr_bytes}b")
 
         return "\n".join(result_parts)
-
-    if name == "list_commands":
-        commands = payload.get("commands") or []
-        if not isinstance(commands, list) or not commands:
-            return "no background commands in this session"
-        preview = []
-        for item in commands[:5]:
-            if not isinstance(item, dict):
-                continue
-            command_id = item.get("command_id", "?")
-            status = item.get("status", "?")
-            command = str(item.get("command", "?")).strip()
-            if len(command) > 40:
-                command = command[:37] + "..."
-            preview.append(f"{command_id}:{status}:{command}")
-        preview_text = "; ".join(preview) if preview else "no usable entries"
-        return f"listed {payload.get('command_count', '?')} background commands -> {preview_text}"
-
-    if name == "read_command_output":
-        command_id = payload.get("command_id", "?")
-        status = payload.get("status", "?")
-        output = str(payload.get("output", "")).strip()
-        if not output:
-            return f"command {command_id} output empty (status={status})"
-        if len(output) > 4000:
-            output = output[:4000] + "\n...[truncated]"
-        return f"command {command_id} output (status={status})\n{output}"
-
-    if name == "wait_command":
-        command_id = payload.get("command_id", "?")
-        status = payload.get("status", "?")
-        if payload.get("timed_out"):
-            return f"waited for {command_id} -> still {status}"
-        exit_code = payload.get("exit_code", "?")
-        return f"waited for {command_id} -> {status} exit={exit_code}"
-
-    if name == "stop_command":
-        command_id = payload.get("command_id", "?")
-        status = payload.get("status", "?")
-        return f"stop requested for {command_id} -> {status}"
 
     if name == "list_tasks":
         tasks = payload.get("tasks", [])
@@ -1172,8 +1120,10 @@ def _build_tool_result_summary(tool_result: Any) -> str:
         state_info = {k: v for k, v in payload.items() if k != "providers"}
         return f"Session state: {json.dumps(state_info, ensure_ascii=False)}"
 
-    # Fallback
-    return f"ok {json.dumps({k: v for k, v in payload.items() if k not in ('content', 'ok', 'base64')})}"[:200]
+    # Fallback for tools without an explicit summary branch (typically MCP tools).
+    # Drop only the heaviest binary-ish keys; let the rest of the payload reach
+    # the model verbatim — partial context is worse than full context.
+    return f"ok {json.dumps({k: v for k, v in payload.items() if k not in ('content', 'ok', 'base64')})}"
 
 
 

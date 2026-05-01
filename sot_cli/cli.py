@@ -1355,10 +1355,37 @@ async def _run_task(runtime: AppRuntime, agent_id: str, prompt: str) -> int:
         )
 
         result = await run_tool_loop(runtime, request, console, is_task=True)
+        result_text_value = getattr(result, "text", "") or ""
+        finished_reason = getattr(result, "finished_reason", "") or ""
         if getattr(result, "is_error", False):
-            status, result_text, error_text = "error", "", getattr(result, "text", "")
+            status, result_text, error_text = "error", "", result_text_value
+        elif finished_reason == "length":
+            # Provider cut the sub-agent off mid-response. The partial text the
+            # model managed to emit is preserved in the Error Log so the boss
+            # sees what was lost, not just a SUCCESS with a truncated body.
+            status = "error"
+            result_text = ""
+            error_text = (
+                "Sub-agent response was cut off by the provider's max_output_tokens (finish_reason=length). "
+                "The work is incomplete. Partial text emitted before the cut:\n\n"
+                + result_text_value
+            ).rstrip()
+        elif not result_text_value.strip():
+            # Empty terminal response: no text, no tool calls, no exception.
+            # Could be a silent provider failure, a dead connection that
+            # returned 200-empty, or the model simply choosing to stop. From
+            # the boss's perspective these are indistinguishable, and "no
+            # result provided" is the honest summary.
+            status = "error"
+            result_text = ""
+            error_text = (
+                "Sub-agent terminated without producing any content "
+                "(empty model response, no tool calls, no exception). "
+                "Treat as inconclusive — re-delegate with a sharper task_prompt "
+                "or execute the step directly."
+            )
         else:
-            status, result_text, error_text = "success", getattr(result, "text", ""), ""
+            status, result_text, error_text = "success", result_text_value, ""
         usage = getattr(result, "usage", {})
     except Exception as e:
         status, result_text, error_text = "error", "", str(e)

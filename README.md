@@ -206,7 +206,7 @@ You can attach core files (like database schemas or project guidelines) permanen
 
 Optional benchmark suite for post-launch validation.
 
-- ✅ [agent_test.md](prompt_tests/agent_test.md): Safe end-to-end benchmark. It validates background worker orchestration, file download and verification, local file create/edit flow, native OS command execution, fallback/retry behavior, and final cleanup/reporting.
+- ✅ [agent_test.md](prompt_tests/agent_test.md): Safe end-to-end benchmark. It validates parallel sub-agent orchestration, file download and verification, local file create/edit flow, native OS command execution, fallback/retry behavior, and final cleanup/reporting.
 - ⚠️ [seppuku_test.md](prompt_tests/seppuku_test.md): Intentionally destructive lab benchmark used to demonstrate raw model power without babysitting or guardrails.
 
 ⚠️WARNING: [seppuku_test.md](prompt_tests/seppuku_test.md) is for isolated lab VM use only .⚠️
@@ -262,7 +262,7 @@ For the complete and up-to-date tool and parameter reference, see [ARCHITECTURE.
 
 All runtime settings live in `sot.toml` under `[tools]`. In a nutshell:
 
-- **Output & detection:** `output_limit`, `binary_check_size`, `default_command_timeout_seconds`.
+- **Detection & limits:** `binary_check_size`, `default_command_timeout_seconds`.
 - **Streaming visibility:** `show_thinking` (model reasoning), `show_full` (tool call arguments in real time).
 - **Loop limits:** `max_rounds` (boss), `delegated_max_rounds` (sub-agent), `repeat_limit` / `delegated_repeat_limit` (abort on identical consecutive rounds).
 - **Reasoning budget:** `reasoning_char_budget` (boss), `delegated_reasoning_char_budget` (sub-agent) — hard cap on streamed reasoning characters per turn. Set it to `0` to disable.

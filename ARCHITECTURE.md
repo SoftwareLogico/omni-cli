@@ -94,14 +94,13 @@ Parameters:
 - `task_prompt` (required): detailed instructions for the Worker.
 - `provider` (optional): provider override for the Worker.
 - `attempts` (optional, integer, min 1): max repeated failed attempts before abort. Default `2`.
-- `background` (optional, boolean): async launch if `true`; blocks for report if `false`. Default `false`.
+- `background` (optional, boolean): default `false`. With `false` the call blocks until the Worker exits, then `wait_task` returns the report immediately. With `true` the call returns instantly with the `agent_id` so the Boss can fan out additional delegations in the same round; `wait_task` on each one then blocks until that specific Worker finishes. Use `true` only when launching multiple delegations in parallel — a single delegation with `background=true` followed by `wait_task` is strictly worse than `background=false`.
 
 #### `wait_task`
 
 Parameters:
 
-- `agent_id` (required): target sub-agent id (e.g. `agent_1`).
-- `timeout_seconds` (optional, integer, min 1): max wait time; omitted means wait indefinitely.
+- `agent_id` (required): target sub-agent id (e.g. `agent_1`). Always blocks until the Worker writes its `response.md`; the runtime detects loops, exhausted budgets, length truncation and silent provider failures and forces the response.md to be written with a clear error status, so an unbounded wait cannot stall.
 
 #### `list_tasks`
 
@@ -116,8 +115,7 @@ No parameters. Returns delegated tasks and status (RUNNING/COMPLETED). Prefer `w
 
 | Setting                             | Default | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | ----------------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `output_limit`                      | `0`     | Max characters of tool output before truncation. Acts as a per-tool firewall against a single noisy command (long log dumps, deep recursive listings, base64-encoded binaries) blowing up the context window. The model still sees a `[truncated]` marker, so it knows when to switch to file-based offloading (`run_command > tmpfile.txt; read_files tmpfile.txt`). Set to `0` to disable truncation — the model sees the full raw output.                                                                                                                                                                                                            |
-| `default_command_timeout_seconds`   | `180`   | Default wall-clock timeout (seconds) applied to `run_command` foreground execution when the model does not pass an explicit `timeout_seconds`. The model is always free to override per call. Increase only if your typical commands legitimately run longer than 3 minutes.                                                                                                                                                                                                                                                                                                     |
+| `default_command_timeout_seconds`   | `180`   | Hard wall-clock timeout (seconds) applied to every `run_command` invocation. The model cannot override it per call — the limit is a property of the runtime, not a parameter. Raise it only if the host's legitimately slow operations consistently exceed three minutes.                                                                                                                                                                                                                                                                                                       |
 | `binary_check_size`                 | `0`     | Byte threshold used by `read_files` to detect binary content. The reader inspects this many bytes at the start of the file and rejects non-UTF8 input above the threshold, preventing the SoT from being polluted with garbage bytes that would also balloon the context. Set to `0` to skip content-based binary detection — all files are treated as text (known binary extensions like `.png` are still blocked).                                                                                                                                                                                                                                                                                                        |
 | `show_thinking`                     | `true`  | Stream the model's reasoning/thinking tokens to the terminal as they arrive. Independent of `show_full`; gates **reasoning** output only. Set to `false` if the live reasoning trace is noisy — the model still reasons internally, you just don't see it scroll.                                                                                                                                                                                                                                                                                                                |
 | `show_full`                         | `true`  | Stream tool-call argument chunks (and any other non-reasoning, non-text chunk the provider emits) in real time as the model generates them, verbatim. When disabled, tool calls are only shown as a single assembled line after streaming completes. Provider chunks are never mutated by the runtime; `show_full` only toggles whether they are rendered live.                                                                                                                                                                                                                  |
@@ -217,8 +215,7 @@ Typical discovery flow:
 
 - `list_dir` is the primary discovery tool for any file type or use case. Use it first when you need to discover, filter, or narrow down files.
 - Once you know the exact path set, switch to `read_files` — it is the single tool for reading file content, used for both one file and batches (pass a `files` array with one or more entries).
-- Prefer full-file reads whenever practical so the Source of Truth receives the whole authoritative file snapshot.
-- Use line-range reads (`start_line`/`end_line`) for targeted inspection of specific sections — for example, following up on a search result or examining a known function.
+- Text files are read in full so the Source of Truth receives the whole authoritative file snapshot.
 
 ## Code Search Tool (`search_code`)
 
@@ -245,25 +242,22 @@ When to use `list_dir` vs `search_code`:
 
 Typical code exploration flow:
 
-- `search_code` to find where a symbol, function, or pattern is used → `read_files` with `start_line`/`end_line` (per-entry) to inspect the surrounding code → `edit_files` to batch every planned change across all touched files in a single atomic call.
+- `search_code` to find where a symbol, function, or pattern is used → `read_files` to pull every relevant file into the SoT → `edit_files` to batch every planned change across all touched files in a single atomic call.
 
 ## File Reading Tool (`read_files`)
 
 `read_files` is the single tool for reading file content into the SoT. It accepts a `files` array — pass a one-element array for a single file, or several entries to batch multiple known paths into the same call. There is no separate single-file reader.
 
-Each `files[]` entry takes `path`, optional `start_line`/`end_line` for UTF-8 text excerpts, and optional `pages`/`password` for PDFs. Files are read independently; partial failures return per-file error entries instead of aborting the whole batch.
+Each `files[]` entry takes `path` and optional `pages`/`password` for PDFs. Files are read independently; per-file failures return per-file error entries instead of aborting the whole batch.
 
 Text file behavior:
 
-- Full reads are the default and preferred mode. They populate the SoT with the complete file.
-- `start_line` and `end_line` are available for any UTF-8 text file and define a 1-indexed inclusive range. Use them to inspect a known section, follow up on a search result, or examine a specific block without loading the entire file.
-- Partial line reads are inspection-only. They do not hydrate the full file into the SoT, which avoids replacing a full authoritative snapshot with a fragment.
-- If you want a file to be fully present in the SoT for subsequent reasoning, do a full read.
+- Text files are read in full. The complete file is loaded into the SoT and stays available for every following turn until detached.
 
 Non-text behavior:
 
-- PDFs use `pages` rather than `start_line`/`end_line`.
-- Images, notebooks, audio, and video do not support line ranges.
+- PDFs accept `pages` for selecting a page range.
+- Images, notebooks, audio, and video are read whole.
 
 ## File Editing Tool (`edit_files`)
 
@@ -287,7 +281,7 @@ Each edit picks ONE mode by which keys it carries. Mixing modes inside a single 
 - Append at end of file → insert mode with `insert_line=last_line` and `position="after"`.
 - Replace every match → text mode with `replace_all=true`.
 - Disambiguate between identical strings → text mode with `before_context`/`after_context` instead of enlarging `old_string`.
-- Create a new file → exactly one entry in `files` with a single text-mode edit: `old_string=""` and `new_string=<full_content>`.
+- Create a new file → use `write_file` as the canonical tool. `edit_files` supports creation as a single text-mode edit with `old_string=""` and `new_string=<full_content>`, kept for the case where batching the create alongside surgical edits to other files in the same atomic call saves a turn.
 
 ### Atomicity
 
@@ -481,6 +475,6 @@ Change runtime parameters for future turns in the current session: `title`, `pro
 
 1. Resume/recovery currently depends on reconstructing `chat_history` and SoT state from persisted request/response artifacts.
 2. `edit_files` is a surgical text mutator (text-match, line-range, or insert mode), atomic per file and batchable across many files in one call. It is not a regex engine nor an AST editor.
-3. `read_files` supports targeted line-range reads (per `files[]` entry) for any UTF-8 text file, but partial reads intentionally do not populate the SoT as full-file snapshots.
+3. `read_files` reads text files in full into the SoT.
 4. `search_code` requires [ripgrep](https://github.com/BurntSushi/ripgrep) (`rg`) to be installed and available in PATH.
 5. Archive files (`zip`, `tar`, `gz`, etc.) cannot be read directly. The model receives a format-specific error with the correct `run_command` invocation to list or extract contents.

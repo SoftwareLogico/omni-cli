@@ -494,15 +494,23 @@ def _apply_edits_to_one_file(arguments: dict[str, Any], root_dir: Path) -> dict[
                 )
                 replacement = _match_line_endings(original_content, replacement)
                 end_index = start_index + len(actual_old_string)
-                # When deleting a span that does NOT include its trailing
-                # newline, also absorb the following \n so we don't leave
-                # a blank line behind.
+                # When deleting a span that fully consumes its line — i.e.
+                # nothing remained before the match on that line AND the next
+                # character is the line's terminator — also absorb the
+                # trailing \n so we don't leave a blank line behind. We
+                # explicitly require the line to be empty BEFORE the match
+                # (line_start..start_index): if there was leading content,
+                # the model wanted that content to stay on its own line, and
+                # absorbing the \n would silently fuse it with the next line
+                # (a corruption that can break syntax in many languages).
                 if (
                     replacement == ""
                     and not actual_old_string.endswith("\n")
                     and original_content[end_index:end_index + 1] == "\n"
                 ):
-                    end_index += 1
+                    line_start = original_content.rfind("\n", 0, start_index) + 1
+                    if original_content[line_start:start_index] == "":
+                        end_index += 1
                 if actual_old_string == replacement and end_index == start_index + len(actual_old_string):
                     raise _EditValidationError(
                         f"edits[{index}] would not change the file (old and new are identical)."

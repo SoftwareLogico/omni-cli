@@ -34,15 +34,9 @@ primary_provider = "ollama"   # fallback when no --provider flag is given
 
 [tools]
 
-    # ── Output limits ──────────────────────────────────────────────────────
-
-    # Max characters from a single tool result. If a command spews 500k chars
-    # of logs, the model sees the first N chars + a "[truncated]" marker.
-    # Set to 0 to disable truncation — the model sees everything.
-    output_limit = 0
-
-    # Max seconds a `run_command` can run before it's killed (unless the model
-    # passes a different timeout). Raise this if your workflows need it.
+    # Hard time limit (in seconds) every `run_command` invocation runs under.
+    # The model cannot override this per call. Raise it only if the host's
+    # legitimately slow operations consistently exceed three minutes.
     default_command_timeout_seconds = 180
 
     # When reading files, the first N bytes are inspected for binary content.

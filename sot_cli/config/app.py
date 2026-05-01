@@ -58,7 +58,6 @@ class MCPServerConfig:
 
 @dataclass
 class ToolConfig:
-    output_limit: int = 0
     default_command_timeout_seconds: int = 180
     binary_check_size: int = 0
     show_thinking: bool = True
@@ -223,7 +222,6 @@ def _parse_app_config(raw: dict[str, Any], keys_raw: dict[str, Any] | None = Non
         prompt=PromptConfig(system=str(prompt_raw.get("system", "")).strip()),
         runtime=RuntimeConfig(primary_provider=primary_provider),
         tools=ToolConfig(
-            output_limit=_parse_non_negative_int(tools_raw.get("output_limit", 0), "tools.output_limit"),
             default_command_timeout_seconds=_parse_non_negative_int(
                 tools_raw.get("default_command_timeout_seconds", 180),
                 "tools.default_command_timeout_seconds",

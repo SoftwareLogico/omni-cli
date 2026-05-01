@@ -11,16 +11,12 @@ from sot_cli.config.prompts import (
     EDIT_FILES_PROMPT,
     GET_SESSION_STATE_PROMPT,
     LIST_DIR_PROMPT,
-    LIST_COMMANDS_PROMPT,
     LIST_TASKS_PROMPT,
     OPEN_PATH_PROMPT,
-    READ_COMMAND_OUTPUT_PROMPT,
     READ_MANY_FILES_PROMPT,
     RUN_COMMAND_PROMPT,
     SEARCH_CODE_PROMPT,
-    STOP_COMMAND_PROMPT,
     UPDATE_SESSION_PROMPT,
-    WAIT_COMMAND_PROMPT,
     WAIT_TASK_PROMPT,
     WRITE_FILE_PROMPT,
 )
@@ -70,8 +66,6 @@ def get_tool_schemas() -> list[dict[str, Any]]:
                                 "type": "object",
                                 "properties": {
                                     "path": {"type": "string", "description": "Absolute path or project-relative path to the file."},
-                                    "start_line": {"type": "integer", "minimum": 1, "description": "1-indexed starting line for a targeted text excerpt. Use with end_line to read a specific range."},
-                                    "end_line": {"type": "integer", "minimum": 1, "description": "1-indexed ending line (inclusive) for a targeted text excerpt. Must be used together with start_line."},
                                     "pages": {"type": "string", "description": "Optional PDF page range like '1-5' or '3'. Only valid for PDF files."},
                                     "password": {"type": "string", "description": "Optional password for encrypted/protected PDF files."},
                                 },
@@ -138,72 +132,10 @@ def get_tool_schemas() -> list[dict[str, Any]]:
                     "type": "object",
                     "properties": {
                         "command": {"type": "string", "description": "Shell command to run."},
-                        "stdin": {"type": "string", "description": "Optional text to feed to the process stdin. Use for passwords, interactive prompts, or piped input. Not available in background mode."},
+                        "stdin": {"type": "string", "description": "Optional text to feed to the process stdin. Use for passwords, interactive prompts, or piped input."},
                         "cwd": {"type": "string", "description": "Optional absolute or project-relative working directory."},
-                        "timeout_seconds": {"type": "integer", "minimum": 0, "description": "Optional timeout in seconds. Use 0 for no timeout."},
-                        "background": {"type": "boolean", "description": "If true, start the command in the background and return immediately with pid and log paths."},
-                        "run_in_background": {"type": "boolean", "description": "Alias for background."},
                     },
                     "required": ["command"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "list_commands",
-                "description": LIST_COMMANDS_PROMPT,
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "read_command_output",
-                "description": READ_COMMAND_OUTPUT_PROMPT,
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "command_id": {"type": "string", "description": "Stable ID returned by run_command in background mode."},
-                        "tail_lines": {"type": "integer", "minimum": 1, "description": "Optional number of trailing lines to read. Defaults to 100."},
-                    },
-                    "required": ["command_id"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "wait_command",
-                "description": WAIT_COMMAND_PROMPT,
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "command_id": {"type": "string", "description": "Stable ID returned by run_command in background mode."},
-                        "timeout_seconds": {"type": "integer", "minimum": 1, "description": "Optional maximum time to wait. If omitted, waits indefinitely."},
-                    },
-                    "required": ["command_id"],
-                    "additionalProperties": False,
-                },
-            },
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "stop_command",
-                "description": STOP_COMMAND_PROMPT,
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "command_id": {"type": "string", "description": "Stable ID returned by run_command in background mode."},
-                    },
-                    "required": ["command_id"],
                     "additionalProperties": False,
                 },
             },
