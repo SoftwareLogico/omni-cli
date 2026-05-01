@@ -1577,7 +1577,10 @@ async def _run_prompt(
             return
         event.app.exit(exception=KeyboardInterrupt, style="class:exiting")
 
-    def _handle_sigint(_signum, _frame) -> None:
+    def _handle_sigint() -> None:
+        """Body of the Ctrl+C response. Same effect whether we got here via the
+        asyncio loop's signal integration (Unix) or the plain `signal.signal`
+        handler (Windows)."""
         nonlocal current_turn_task, turn_interrupt_requested
         try:
             if try_interrupt_active_foreground():
@@ -1598,7 +1601,26 @@ async def _run_prompt(
             return
         raise KeyboardInterrupt()
 
-    signal.signal(signal.SIGINT, _handle_sigint)
+    def _handle_sigint_sync(_signum, _frame) -> None:
+        # Adapter for the (signum, frame) signature that signal.signal
+        # requires. add_signal_handler passes no arguments.
+        _handle_sigint()
+
+    # The asyncio loop's native signal integration is what actually makes
+    # Ctrl+C cancel the model turn during long awaits on httpx. It does TWO
+    # things: registers our callback AND wires asyncio's set_wakeup_fd so
+    # the selector exits the moment a signal arrives. Plain signal.signal
+    # only does the first, which is why the bare-signal path fails to wake
+    # the loop while it's parked waiting for the first byte from the model.
+    # On Windows add_signal_handler raises NotImplementedError; fall back to
+    # plain signal.signal there.
+    loop = asyncio.get_running_loop()
+    sigint_via_loop = False
+    try:
+        loop.add_signal_handler(signal.SIGINT, _handle_sigint)
+        sigint_via_loop = True
+    except (NotImplementedError, RuntimeError):
+        signal.signal(signal.SIGINT, _handle_sigint_sync)
 
     prompt_session = PromptSession(key_bindings=kb, multiline=True)
 
@@ -1648,6 +1670,20 @@ async def _run_prompt(
             if not normalized_prompt:
                 continue
 
+            # prompt_toolkit takes over SIGINT during prompt_async() and on
+            # exit calls loop.remove_signal_handler(SIGINT). That clears
+            # both our callback AND asyncio's wakeup_fd wiring, so the
+            # selector no longer wakes when SIGINT arrives — exactly the
+            # "Ctrl+C prints ^C but the model keeps going" symptom.
+            # Re-installing via add_signal_handler restores both pieces.
+            if sigint_via_loop:
+                try:
+                    loop.add_signal_handler(signal.SIGINT, _handle_sigint)
+                except (NotImplementedError, RuntimeError):
+                    pass
+            else:
+                signal.signal(signal.SIGINT, _handle_sigint_sync)
+
             current_record = runtime.sessions.load(record.id)
             active_provider = current_record.provider
             active_model = current_record.model
@@ -1671,4 +1707,10 @@ async def _run_prompt(
                 current_turn_task = None
                 turn_interrupt_requested = False
     finally:
-        signal.signal(signal.SIGINT, previous_sigint_handler)
+        if sigint_via_loop:
+            try:
+                loop.remove_signal_handler(signal.SIGINT)
+            except (NotImplementedError, RuntimeError):
+                pass
+        else:
+            signal.signal(signal.SIGINT, previous_sigint_handler)
