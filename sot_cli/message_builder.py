@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 from typing import Any
 
-from sot_cli.config.prompts import AGENT_SYSTEM_PROMPT, JB_SYSTEM_PROMPT, SUB_AGENT_SYSTEM_PROMPT
+from sot_cli.config.prompts import AGENT_SYSTEM_PROMPT, JB_SYSTEM_PROMPT, RUNTIME_SYSTEM_PROMPT, SUB_AGENT_SYSTEM_PROMPT
 from sot_cli.constants import SOT_MARKER
 from sot_cli.utils.text import _count_lines
 
@@ -382,5 +382,5 @@ def build_previous_turn_metadata_message(metadata: dict[str, Any]) -> dict[str, 
     if not pairs:
         return None
 
-    content = "=== CURRENT METADATA ===\n" + "; ".join(pairs) + "\n=== END CURRENT METADATA ==="
+    content = "=== CURRENT METADATA ===\n" + "; ".join(pairs) + "\n=== END CURRENT METADATA ===\n\n" + RUNTIME_SYSTEM_PROMPT
     return {"role": "user", "content": content}

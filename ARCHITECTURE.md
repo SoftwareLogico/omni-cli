@@ -121,9 +121,10 @@ These are runtime tools the Boss model uses during a turn.
 Parameters:
 
 - `task_prompt` (required): detailed instructions for the Worker.
-- `provider` (optional): provider override for the Worker.
 - `attempts` (optional, integer, min 1): max repeated failed attempts before abort. Default `2`.
 - `background` (optional, boolean): default `false`. With `false` the call blocks until the Worker exits, then `wait_task` returns the report immediately. With `true` the call returns instantly with the `agent_id` so the Boss can fan out additional delegations in the same round; `wait_task` on each one then blocks until that specific Worker finishes. Use `true` only when launching multiple delegations in parallel — a single delegation with `background=true` followed by `wait_task` is strictly worse than `background=false`.
+
+The sub-agent model is resolved from: session `subagent_model` → provider config `subagent_model` → main model. The model has no control over which model or provider the sub-agent uses.
 
 #### `wait_task`
 
@@ -501,10 +502,11 @@ Use this when you need a full context reset instead of detaching files one by on
 Spawn a temporary sub-agent with a clean context. Parameters:
 
 - `task_prompt` (required): detailed instructions
-- `provider` (optional): override provider
-- `model` (optional): override model. Resolution chain: tool arg → session `subagent_model` → provider config `subagent_model` → main model.
 - `attempts` (optional, default 2): max retries before abort
 - `background` (optional, default false): run async
+
+The sub-agent model is resolved from: session `subagent_model` → provider config `subagent_model` → main model.
+The model has no control over which model or provider the sub-agent uses.
 
 Used from the agent to parallelize work or offload from a heavy context. Sub-agents cannot delegate further.
 
