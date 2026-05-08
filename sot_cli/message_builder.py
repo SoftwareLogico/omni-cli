@@ -31,6 +31,9 @@ def build_orchestration_rules(is_sub_agent: bool = False) -> str:
     host_context = build_host_environment_prompt()
     if host_context:
         parts.append(host_context)
+    # Sub-agents get runtime rules injected from turn 1 (main agent gets them via CURRENT METADATA)
+    if is_sub_agent:
+        parts.append(RUNTIME_SYSTEM_PROMPT.strip())
     return "\n\n".join(parts)
 
 

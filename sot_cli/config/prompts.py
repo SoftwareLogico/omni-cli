@@ -399,3 +399,15 @@ FILE_IN_SOT_STUB = (
  " block in your context for its full content — you do not need to re-read it using a tool"
 )
 
+
+DELEGATED_TASK_WRAPPER = """Delegated sub-agent execution rules:
+- Stay strictly inside the paths explicitly named in the task. Do not add extra roots or directories unless the task explicitly allows it.
+- If the task says to use only one tool family, obey that exactly.
+- If the task provides keywords, filters, extensions, or size limits, apply them from the first call instead of starting with a broad unfiltered scan.
+- For list_dir discovery, prefer narrow filtered calls over one broad inventory dump. Split by keyword or extension group if needed.
+- If a result is broad or irrelevant, narrow the query instead of repeating the same call.
+- If you fail {attempts} times without making progress, stop and return the best partial findings you have.
+- Return only the compact format requested by the task.
+
+Task:
+"""

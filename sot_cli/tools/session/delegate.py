@@ -7,22 +7,10 @@ from pathlib import Path
 from typing import Any
 
 from sot_cli.config import KNOWN_PROVIDERS
+from sot_cli.config.prompts import DELEGATED_TASK_WRAPPER
 from sot_cli.runtime import AppRuntime
 from sot_cli.tools.utils.validators import _require_string
 
-
-DELEGATED_TASK_WRAPPER = """Delegated sub-agent execution rules:
-- Stay strictly inside the paths explicitly named in the task. Do not add extra roots or directories unless the task explicitly allows it.
-- If the task says to use only one tool family, obey that exactly.
-- If the task provides keywords, filters, extensions, or size limits, apply them from the first call instead of starting with a broad unfiltered scan.
-- For list_dir discovery, prefer narrow filtered calls over one broad inventory dump. Split by keyword or extension group if needed.
-- For list_dir discovery, prefer narrow filtered calls over one broad inventory dump. Split by keyword or extension group if needed.
-- If a result is broad or irrelevant, narrow the query instead of repeating the same call.
-- If you fail {attempts} times without making progress, stop and return the best partial findings you have.
-- Return only the compact format requested by the task.
-
-Task:
-"""
 
 def _write_response_md(
     parent_session_dir: Path,
