@@ -33,6 +33,26 @@ Executes a single turn against an existing session. Creates a fresh `SoTState` p
 
 Executes a headless agent session. Used internally by the `delegate_task` tool to spawn sub-agents in isolated environments.
 
+
+## Running without an environment manager
+
+Install globally with pip:
+
+```
+pip install --user -e .
+```
+
+Then launch directly:
+
+```
+sot-cli prompt
+```
+
+Or with the module name (underscore, not hyphen):
+
+```
+python -m sot_cli prompt
+```
 ## Agent and Sub-agent Commands & Parameters
 
 This section centralizes the parameters that are commonly omitted in high-level docs.
@@ -75,11 +95,13 @@ Supported flags:
 - `--provider <lmstudio|openrouter|openai|ollama|nvidia>`: provider override.
 - `--model <name>`: model override.
 - `--no-tools`: disables tool loop (plain chat behavior).
+- `--subagent_model <model>`: override the sub-agent model for delegated tasks.
 
 Examples:
 
 - `sot-cli prompt`
 - `sot-cli prompt <session_id> --provider openrouter --model x-ai/grok-4.1-fast`
+- `sot-cli prompt --subagent_model anthropic/claude-sonnet-4`
 - `sot-cli --list_sessions`
 - `sot-cli --clean_sot <session_id>` (removes persisted SoT blocks; for in-memory cleanup inside an active session use the `clean_sot` tool)
 - `sot-cli prompt --subagent_model anthropic/claude-sonnet-4`

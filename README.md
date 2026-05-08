@@ -81,6 +81,19 @@ pip install -e .
 sot-cli
 ```
 
+### Running without an environment manager
+
+```bash
+pip install --user -e .
+sot-cli
+```
+
+Or with the module name (underscore, not hyphen):
+
+```bash
+python -m sot_cli
+```
+
 Follow the steps the first time, have Fun!!
 
 ## 🛠 Manual Installation
