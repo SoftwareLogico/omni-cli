@@ -21,8 +21,29 @@ class SoTState:
     tracked_media: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     tracked_file_mtimes: dict[str, int] = field(default_factory=dict)
     session_source_entries: list[SourceEntry] = field(default_factory=list)
+    tracked_file_estimated_tokens: dict[str, int | None] = field(default_factory=dict)
+    session_source_entries: list[SourceEntry] = field(default_factory=list)
     session_tracked_file_paths: set[str] = field(default_factory=set)
     session_tracked_media_paths: set[str] = field(default_factory=set)
+
+
+def _estimate_tokens(text: str) -> int | None:
+    """Estimate token count using tiktoken o200k_base (GPT-4o tokenizer).
+    Returns None if tiktoken is not available."""
+    try:
+        import tiktoken
+        enc = tiktoken.get_encoding("o200k_base")
+        return len(enc.encode(text))
+    except Exception:
+        return None
+
+
+def _store_file_token_estimate(state: SoTState, fpath: str) -> None:
+    content = state.tracked_files.get(fpath)
+    if isinstance(content, str) and content:
+        state.tracked_file_estimated_tokens[fpath] = _estimate_tokens(content)
+    else:
+        state.tracked_file_estimated_tokens.pop(fpath, None)
 
 
 def begin_turn(state: SoTState) -> None:
@@ -112,6 +133,7 @@ def merge_session_into_tracked(
     for path in list(state.session_tracked_file_paths):
         if not _is_session_backed_path(path, state.session_source_entries):
             state.tracked_files.pop(path, None)
+            state.tracked_file_estimated_tokens.pop(path, None)
             state.tracked_file_mtimes.pop(path, None)
             state.session_tracked_file_paths.discard(path)
 
@@ -122,6 +144,7 @@ def merge_session_into_tracked(
 
     for path, content in session_snapshots.items():
         state.tracked_files[path] = content
+        _store_file_token_estimate(state, path)
         if _is_session_backed_path(path, state.session_source_entries):
             state.session_tracked_file_paths.add(path)
 
@@ -172,6 +195,7 @@ def update_tracked_from_tool_result(
         fpath = payload.get("path")
         if isinstance(fpath, str) and fpath:
             state.tracked_files.setdefault(fpath, "")
+            _store_file_token_estimate(state, fpath)
             if _is_session_backed_path(fpath, state.session_source_entries):
                 state.session_tracked_file_paths.add(fpath)
         return
@@ -214,6 +238,7 @@ def update_tracked_from_tool_result(
 
             if operation == "create":
                 state.tracked_files.setdefault(fpath, "")
+                _store_file_token_estimate(state, fpath)
                 if is_session_backed:
                     state.session_tracked_file_paths.add(fpath)
                 continue
@@ -225,6 +250,7 @@ def update_tracked_from_tool_result(
             if not (is_already_tracked or is_session_backed):
                 continue
             state.tracked_files.setdefault(fpath, "")
+            _store_file_token_estimate(state, fpath)
             if is_session_backed:
                 state.session_tracked_file_paths.add(fpath)
         return
@@ -233,6 +259,7 @@ def update_tracked_from_tool_result(
         fpath = payload.get("path")
         if isinstance(fpath, str) and fpath:
             state.tracked_files.pop(fpath, None)
+            state.tracked_file_estimated_tokens.pop(fpath, None)
             state.tracked_media.pop(fpath, None)
             state.tracked_file_mtimes.pop(fpath, None)
             state.session_tracked_file_paths.discard(fpath)
@@ -243,6 +270,7 @@ def update_tracked_from_tool_result(
         state.tracked_files.clear()
         state.tracked_media.clear()
         state.tracked_file_mtimes.clear()
+        state.tracked_file_estimated_tokens.clear()
         state.session_tracked_file_paths.clear()
         state.session_tracked_media_paths.clear()
         return
@@ -258,6 +286,7 @@ def update_tracked_from_tool_result(
         for fpath in detached:
             if isinstance(fpath, str) and fpath:
                 state.tracked_files.pop(fpath, None)
+                state.tracked_file_estimated_tokens.pop(fpath, None)
                 state.tracked_media.pop(fpath, None)
                 state.tracked_file_mtimes.pop(fpath, None)
                 state.session_tracked_file_paths.discard(fpath)
@@ -407,6 +436,7 @@ def _refresh_tracked_files_from_disk(state: SoTState) -> None:
             continue
         try:
             state.tracked_files[fpath] = path.read_text(encoding="utf-8")
+            _store_file_token_estimate(state, fpath)
             try:
                 stat = path.stat()
                 mtime_ns = getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1_000_000_000))
@@ -485,6 +515,7 @@ def _update_single_read_result(
     content = payload.get("content")
     if isinstance(content, str):
         state.tracked_files[fpath] = content
+        _store_file_token_estimate(state, fpath)
         mtime_ns = payload.get("modified_ns")
         if isinstance(mtime_ns, int):
             state.tracked_file_mtimes[fpath] = mtime_ns

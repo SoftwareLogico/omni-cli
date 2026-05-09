@@ -77,6 +77,11 @@ FALLBACK_SEARCH_TIMEOUT_SECONDS = 30
 # Set to 0 to disable the cap.
 FALLBACK_REASONING_CHAR_BUDGET = 0
 FALLBACK_DELEGATED_REASONING_CHAR_BUDGET = 0
+
+# Fallback threshold for max tokens a single text file can have before read_files
+# warns and requires `force: true`. Overridable via [tools].max_readable_file_tokens
+# in sot.toml. Set to 0 to disable the warning entirely.
+FALLBACK_MAX_READABLE_FILE_TOKENS = 64_000
 # Hard cap on characters kept from the `reasoning` field of any tool-bearing
 # assistant message in OLD (already-closed) turns when the outbound payload
 # is built. Keeps the narrative ("the model used edit_files because…") while

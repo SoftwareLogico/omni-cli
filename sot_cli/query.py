@@ -388,6 +388,26 @@ async def run_tool_loop(
 
     for round_index in range(effective_max_rounds):
         adapter = await runtime.provider_adapter_async(request.provider_name, request.model)
+
+        # Build context info for tool validation
+        ctx_cap = adapter.capability.context_length
+        used_tokens = result.usage.get("latest_total_tokens")
+        if used_tokens is None and conversation_state.last_turn_metadata:
+            # Fallback: use raw context numbers from previous turn's metadata
+            meta_ctx_length = conversation_state.last_turn_metadata.get("__ctx_length__")
+            meta_prompt = conversation_state.last_turn_metadata.get("__ctx_prompt_tokens__")
+            if meta_ctx_length and meta_prompt:
+                if ctx_cap is None:
+                    ctx_cap = meta_ctx_length
+                used_tokens = meta_prompt
+        if ctx_cap and used_tokens is not None:
+            context_info = {
+                "context_length": ctx_cap,
+                "estimated_remaining": max(0, ctx_cap - used_tokens),
+            }
+        else:
+            context_info = None
+
         registry = ToolRegistry(
             runtime,
             request.session_id,
@@ -395,6 +415,7 @@ async def run_tool_loop(
             request.model,
             request.disable_delegation,
             conversation_state.sot,  # <--- AÑADIR ESTO
+            context_info=context_info,
         )
 
         if not is_task:
@@ -887,15 +908,32 @@ def _build_tool_result_summary(tool_result: Any) -> str:
     name = tool_result.name
 
     if name == "read_files":
+        # Prepend context warnings from supplemental_messages
+        warning_parts: list[str] = []
+        for sm in tool_result.supplemental_messages:
+            if isinstance(sm, dict) and isinstance(sm.get("content"), str):
+                txt = sm["content"].strip()
+                if txt.startswith("[CONTEXT WARNING]") and txt not in warning_parts:
+                    warning_parts.append(txt)
+
         result_count = payload.get("result_count", "?")
         success_count = payload.get("success_count", "?")
         error_count = payload.get("error_count", "?")
         results = payload.get("results") or []
 
         if not isinstance(results, list) or not results:
-            return f"batch read {success_count}/{result_count} ok ({error_count} errors) -> SoT updated"
+            warning_text = warning_parts[0] if warning_parts else ""
+            batch_line = f"batch read {success_count}/{result_count} ok ({error_count} errors)"
+            if success_count != "?" and int(success_count) > 0:
+                batch_line += " -> SoT updated"
+            if warning_text:
+                return warning_text + "\n" + batch_line
+            return batch_line
 
-        lines = [f"batch read {success_count}/{result_count} ok ({error_count} errors):"]
+        lines = []
+        if warning_parts:
+            lines.append(warning_parts[0])
+        lines.append(f"batch read {success_count}/{result_count} ok ({error_count} errors):")
         for item in results:
             if not isinstance(item, dict):
                 continue

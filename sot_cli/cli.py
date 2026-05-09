@@ -406,7 +406,11 @@ def _render_resumed_summary(
         )
         for fpath in sorted(str(p) for p in sot_files):
             fname = Path(fpath).name
-            table.add_row(f"  📄 {escape(fname)}", "[dim]in context[/dim]")
+            est = snapshot.get("sot_file_tokens", {}).get(fpath)
+            if est is not None:
+                table.add_row(f"  📄 {escape(fname)}", f"{est:,} tokens in context")
+            else:
+                table.add_row(f"  📄 {escape(fname)}", "in context")
     elif snapshot.get("SoT Tracked Files"):
         try:
             table.add_section()
@@ -1423,9 +1427,14 @@ async def _run_command_turn(
             except Exception:
                 pass
             usage_table.add_row("SoT Tracked Files", "Always updated in real time => " + str(len(sot_files)), style="bold magenta")
+            token_estimates = getattr(conversation_state.sot, "tracked_file_estimated_tokens", None) or {}
             for fpath in sorted(sot_files):
                 fname = Path(fpath).name
-                usage_table.add_row(f"  📄 {escape(fname)}", "[dim]in context[/dim]")
+                est = token_estimates.get(fpath)
+                if est is not None:
+                    usage_table.add_row(f"  📄 {escape(fname)}", f"{est:,} tokens in context")
+                else:
+                    usage_table.add_row(f"  📄 {escape(fname)}", "in context")
             
         if agent_statuses:
             try:
@@ -1467,8 +1476,13 @@ async def _run_command_turn(
         if ctx_len and ctx_len > 0 and isinstance(latest_prompt_tokens, (int, float)):
             pct_raw = min(100, int((latest_prompt_tokens / ctx_len) * 100))
             meta_snapshot["Context"] = f"{pct_raw}% ({int(latest_prompt_tokens)}/{ctx_len})"
+            # Store raw numeric context info for first-turn tool validation
+            meta_snapshot["__ctx_prompt_tokens__"] = int(latest_prompt_tokens)
+            meta_snapshot["__ctx_length__"] = int(ctx_len)
         if sot_files:
             meta_snapshot["SoT Tracked Files"] = len(sot_files)
+            token_estimates = getattr(conversation_state.sot, "tracked_file_estimated_tokens", None) or {}
+            meta_snapshot["sot_file_tokens"] = dict(token_estimates)
         if agent_statuses:
             meta_snapshot["Agents Used"] = len(agent_statuses)
         meta_snapshot["launch_context"] = detect_launch_context()

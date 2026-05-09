@@ -24,6 +24,18 @@ from sot_cli.tools.utils.path_helpers import _find_similar_file, _is_blocked_dev
 from sot_cli.tools.utils.validators import _normalize_pages_argument, _require_string
 
 
+_KNOWN_BINARY_OR_MEDIA_EXTS: frozenset[str] = frozenset(
+    {ext for grp in (
+        BINARY_EXTENSIONS, IMAGE_EXTENSIONS, PDF_EXTENSIONS,
+        NOTEBOOK_EXTENSIONS, AUDIO_EXTENSIONS, VIDEO_EXTENSIONS,
+    ) for ext in grp}
+)
+
+
+def _is_media_or_binary(path: Path) -> bool:
+    return path.suffix.lower().lstrip(".") in _KNOWN_BINARY_OR_MEDIA_EXTS
+
+
 def _read_text_file(path: Path) -> tuple[str, int]:
     try:
         content = path.read_text(encoding="utf-8")
@@ -48,6 +60,8 @@ def execute_read_many_files(
     file_unchanged_stub: str,
     sot_state: Any = None,
     file_in_sot_stub: str | None = None,
+    context_info: dict[str, Any] | None = None,
+    max_readable_file_tokens: int = 64000,
 ) -> ToolPayload:
     files = arguments.get("files")
     if not isinstance(files, list) or not files:
@@ -55,6 +69,7 @@ def execute_read_many_files(
 
     results: list[dict[str, Any]] = []
     supplemental_messages: list[dict[str, Any]] = []
+    _context_warnings: list[str] = []
     success_count = 0
     error_count = 0
 
@@ -72,6 +87,45 @@ def execute_read_many_files(
         path_label = raw_path if isinstance(raw_path, str) and raw_path.strip() else f"[index {index}]"
 
         try:
+            force = bool(entry.get("force", False))
+            if not force:
+                from sot_cli.tools.utils.path_helpers import resolve_path
+                check_path = resolve_path(raw_path, root_dir)
+                if check_path.is_file() and not _is_media_or_binary(check_path):
+                    content = check_path.read_text(encoding="utf-8")
+                    from sot_cli.sot import _estimate_tokens
+                    rough_tokens = _estimate_tokens(content)
+                    if rough_tokens is None:
+                        rough_tokens = len(content) // 4
+                    remaining = context_info.get("estimated_remaining") if context_info else None
+                    context_max = context_info.get("context_length") if context_info else None
+
+                    if max_readable_file_tokens > 0 and rough_tokens > max_readable_file_tokens:
+                        remaining_text = f" ({remaining:,} free)" if remaining is not None else ""
+                        msg = (
+                            f"File '{path_label}' is ~{rough_tokens:,} tokens, which is a large file"
+                            f"{remaining_text}. Ask the user if they really want to read this entire file, "
+                            f"use search_code for targeted exploration, or pass 'force': true in the "
+                            f"read_files entry to read it anyway."
+                        )
+                        if remaining is not None and rough_tokens > remaining:
+                            pct = int((rough_tokens / max(remaining + rough_tokens, 1)) * 100)
+                            msg = (
+                                f"File '{path_label}' is ~{rough_tokens:,} tokens. "
+                                f"Your remaining context is ~{remaining:,} tokens"
+                                + (f" (max: {context_max:,})" if context_max else "")
+                                + f". This would consume ~{pct}% of available space. "
+                                f"Use search_code to explore specific sections, ask the user for confirmation, or pass "
+                                f"'force': true in the read_files entry to read it anyway."
+                            )
+                        _context_warnings.append(msg)
+                        supplemental_messages.append({
+                            "role": "user",
+                            "content": f"[CONTEXT WARNING] {msg}",
+                        })
+                        # Don't read - file too large, warn instead
+                        continue
+
             raw_result = execute_read_text_file(
                 entry,
                 root_dir=root_dir,
@@ -117,7 +171,33 @@ def execute_read_many_files(
             "results": results,
         },
         supplemental_messages=supplemental_messages,
+        model_content=_build_read_result_content(results, error_count, _context_warnings),
     )
+
+
+def _build_read_result_content(
+    results: list[dict[str, Any]],
+    error_count: int,
+    context_warnings: list[str],
+) -> str:
+    parts: list[str] = []
+    if context_warnings:
+        parts.append("\n".join(context_warnings))
+        parts.append("")
+    success_count = sum(1 for r in results if r.get("ok"))
+    total = len(results)
+    parts.append(f"batch read {success_count}/{total} ok ({error_count} errors):")
+    for r in results:
+        if r.get("ok"):
+            path = r.get("path", "?")
+            lines = r.get("total_lines", "?")
+            size = r.get("size_bytes", "?")
+            parts.append(f"- read {path} ({lines} lines, {size} bytes) -> SoT")
+        else:
+            path = r.get("path", "?")
+            err = r.get("error", "Unknown error")
+            parts.append(f"- ERROR {path}: {err}")
+    return "\n".join(parts)
 
 
 def _raise_binary_error(ext: str, path: Path) -> None:

@@ -72,6 +72,7 @@ class ToolConfig:
     reasoning_char_budget: int = 0
     delegated_reasoning_char_budget: int = 4000
     compression_reasoning_trunc_chars: int = 240
+    max_readable_file_tokens: int = 64000
 
 
 @dataclass
@@ -258,6 +259,10 @@ def _parse_app_config(raw: dict[str, Any], keys_raw: dict[str, Any] | None = Non
             compression_reasoning_trunc_chars=_parse_non_negative_int(
                 tools_raw.get("compression_reasoning_trunc_chars", 240),
                 "tools.compression_reasoning_trunc_chars",
+            ),
+            max_readable_file_tokens=_parse_non_negative_int(
+                tools_raw.get("max_readable_file_tokens", 64000),
+                "tools.max_readable_file_tokens",
             ),
         ),
         mcp_servers=mcp_servers,

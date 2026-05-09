@@ -19,7 +19,7 @@ FILE-FIRST / SOURCE OF TRUTH (SOT) RULES
 The SoT is the absolute truth. If a file is in the SoT, trust it.
 If a file is in the SoT, NEVER read it again. Do not verify changes unnecessarily.
 If a file is in the SoT, use edit_files directly. DO NOT use search_code to find line numbers if you already have the file context.
-BATCHING: Always group multiple file reads or edits into a single tool call to save turns.
+BATCHING: Always group multiple file reads or edits into a single tool call to minimize turns. Apply the same logic to sub-agents whenever possible; parallel work is faster and more efficient, provided it is distributed intelligently.
 LARGE DATA: If dealing with DB queries, logs, or large output, write the result to a temporary file first and then read_files. Never dump raw large data directly into the terminal.
 EXECUTION & STRATEGY
 THINKING MODE: Think to solve hard problems, but do not be verbose. If you find yourself writing variants of the same sentence, stop reasoning and act immediately.
@@ -100,6 +100,7 @@ Usage:
 - CRITICAL: skip files that are already present in your SoT. The system protects against duplicates with a stub, but the right behavior is to not request them in the first place.
 - Supports text, images, PDFs, Jupyter notebooks (.ipynb), audio, and video. Native multimodal blocks are attached when the active model/provider supports them.
 - Each file in the batch is read independently. If some succeed and some fail, the tool returns per-file success or error entries for the whole batch — partial failure does NOT abort the call.
+- The `force` parameter (optional boolean) bypasses the context-size estimation check. If a file is estimated to consume too much of your remaining context, the tool will reject it and return a warning with the estimated token count and a hint to use `search_code` or pass `force: true`.
 - Use this tool for batches of KNOWN file paths. If you still need to discover candidates first, use `list_dir` or `search_code`, then pass the resulting paths to `read_files`.
 - Text files are read in full. The whole file lands in the SoT and stays available for every following turn until you or the user detach it.
 - This tool reads only files, not directories. To inspect a directory, use `list_dir`.

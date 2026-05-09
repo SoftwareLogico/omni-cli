@@ -39,6 +39,7 @@ class ToolRegistry:
         model: str,
         disable_delegation: bool = False,
         sot_state: Any = None,  # <--- AÑADIR ESTO
+        context_info: dict[str, Any] | None = None,
     ) -> None:
         self.runtime = runtime
         self.session_id = session_id
@@ -46,6 +47,7 @@ class ToolRegistry:
         self.model = model
         self.disable_delegation = disable_delegation
         self.sot_state = sot_state  # <--- AÑADIR ESTO
+        self.context_info = context_info
         self._read_cache: dict[tuple[str, str | None, int | None, int | None], tuple[int, dict[str, Any]]] = {}
 
     def schemas(self) -> list[dict[str, Any]]:
@@ -180,6 +182,8 @@ class ToolRegistry:
             file_unchanged_stub=FILE_UNCHANGED_STUB,
             sot_state=self.sot_state,
             file_in_sot_stub=FILE_IN_SOT_STUB,
+            context_info=self.context_info,
+            max_readable_file_tokens=self.runtime.config.tools.max_readable_file_tokens,
         )
 
     def _search_code(self, arguments: dict[str, Any]) -> dict[str, Any]:

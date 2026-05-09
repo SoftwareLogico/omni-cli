@@ -69,6 +69,7 @@ def get_tool_schemas() -> list[dict[str, Any]]:
                                     "path": {"type": "string", "description": "Absolute path or project-relative path to the file."},
                                     "pages": {"type": "string", "description": "Optional PDF page range like '1-5' or '3'. Only valid for PDF files."},
                                     "password": {"type": "string", "description": "Optional password for encrypted/protected PDF files."},
+                                    "force": {"type": "boolean", "description": "Bypass context-size warning and read the file anyway. Use only when you are certain the file fits in the remaining context."},
                                 },
                                 "required": ["path"],
                                 "additionalProperties": False,
