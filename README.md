@@ -194,7 +194,13 @@ sot-cli --provider [openrouter/lmstudio/openai/ollama/nvidia]
 # e.g. sot-cli --provider openai
 
 sot-cli --provider [openrouter/lmstudio/openai/ollama/nvidia] --model modelName
-# e.g. sot-cli --provider openai --model gpt-5.4-mini-2026-03-17
+# Start a session (3 equivalent forms)
+sot-cli
+sot-cli prompt
+sot-cli --prompt
+
+# Start with a specific model
+sot-cli prompt --model x-ai/grok-4.1-fast
 
 # List all sessions as JSON (no AI round-trip, reads straight from disk)
 sot-cli --list_sessions

@@ -99,12 +99,13 @@ Supported flags:
 
 Examples:
 
+- `sot-cli`
 - `sot-cli prompt`
+- `sot-cli --prompt`
 - `sot-cli prompt <session_id> --provider openrouter --model x-ai/grok-4.1-fast`
 - `sot-cli prompt --subagent_model anthropic/claude-sonnet-4`
 - `sot-cli --list_sessions`
 - `sot-cli --clean_sot <session_id>` (removes persisted SoT blocks; for in-memory cleanup inside an active session use the `clean_sot` tool)
-- `sot-cli prompt --subagent_model anthropic/claude-sonnet-4`
 
 #### `sot-cli chat [session_id]`
 

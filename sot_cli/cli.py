@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from argparse import ArgumentParser, Namespace
+from argparse import ArgumentParser, Namespace, RawDescriptionHelpFormatter
 from datetime import datetime
 import json
 from pathlib import Path
@@ -76,7 +76,20 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _normalize_argv_for_default_prompt(argv: list[str] | None) -> list[str] | None:
-    """Insert the implicit `prompt` command when the user omits it."""
+    """Convert old-style positional commands to --flag style.
+
+    Handles:
+      sot-cli                          -> (no change, interactive mode)
+      sot-cli SESSION_ID               -> sot-cli --session SESSION_ID
+      sot-cli prompt [args...]         -> sot-cli [args...] (prompt is implicit)
+      sot-cli chat [args...]           -> sot-cli [args...] (chat is implicit)
+      sot-cli command SESSION_ID TEXT  -> sot-cli --command SESSION_ID TEXT
+      sot-cli run_task ID TEXT         -> sot-cli --run_task ID TEXT
+      sot-cli status                   -> sot-cli --status
+      sot-cli sot_attach SESSION PATH  -> sot-cli --sot_attach SESSION PATH
+      sot-cli sot_show SESSION         -> sot-cli --sot_show SESSION
+      sot-cli sot_delete SESSION REF   -> sot-cli --sot_delete SESSION REF
+    """
     if argv is None:
         raw_args = sys.argv[1:]
         should_return_none = True
@@ -87,28 +100,39 @@ def _normalize_argv_for_default_prompt(argv: list[str] | None) -> list[str] | No
     if not raw_args:
         return None if should_return_none else raw_args
 
-    insert_at = 0
-    while insert_at < len(raw_args):
-        token = raw_args[insert_at]
+    # Already a --flag: return as-is
+    if raw_args[0].startswith("-"):
+        return None if should_return_none else raw_args
 
-        if token in {"-h", "--help", "--list_sessions", "--clean_sot"}:
-            return None if should_return_none else raw_args
+    first = raw_args[0]
 
-        if token == "--config":
-            insert_at += 2
-            continue
-
-        if token.startswith("--config="):
-            insert_at += 1
-            continue
-
-        if token in _COMMAND_NAMES:
-            return None if should_return_none else raw_args
-
-        normalized = raw_args[:insert_at] + ["prompt"] + raw_args[insert_at:]
+    # Session ID pattern (e.g. 20260509-114513) -> --session
+    if re.match(r"^\d{8}-\d{6}$", first):
+        normalized = ["--session"] + raw_args
         return normalized if not should_return_none else normalized
 
-    return None if should_return_none else raw_args
+    # Known command names -> convert to --flag
+    command_to_flag = {
+        "prompt": None,  # prompt is implicit, strip it
+        "chat": None,    # chat is implicit, strip it
+        "command": "--command",
+        "run_task": "--run_task",
+        "status": "--status",
+        "sot_attach": "--sot_attach",
+        "sot_show": "--sot_show",
+        "sot_delete": "--sot_delete",
+    }
+
+    flag = command_to_flag.get(first)
+    if flag is None:
+        # Strip the implicit command name, keep rest
+        normalized = raw_args[1:]
+    elif flag:
+        normalized = [flag] + raw_args[1:]
+    else:
+        normalized = raw_args
+
+    return normalized if not should_return_none else normalized
 
 
 def _submit_shortcut_help_text() -> str:
@@ -994,10 +1018,48 @@ def _dispatch(args: Namespace) -> int:
 
     runtime = bootstrap_runtime(args.config)
 
-    if (
-        args.command in {None, "prompt", "chat"}
-        and not getattr(args, "provider", None)
-        and not getattr(args, "session_id", None)
+    # Non-async commands first
+    if args.status:
+        _print_status(runtime)
+        return 0
+
+    if args.sot_attach is not None:
+        session_id, target = args.sot_attach
+        record = runtime.sessions.attach_path(
+            session_id=session_id, target_path=target,
+            label="", recursive=True,
+        )
+        console.print(f"[green]Attached to SoT in session {escape(record.id)}[/green]")
+        return 0
+
+    if args.sot_show is not None:
+        _print_sot(runtime, args.sot_show)
+        return 0
+
+    if args.sot_delete is not None:
+        session_id, ref = args.sot_delete
+        try:
+            record, removed = runtime.sessions.remove_source_entry(session_id, entry_id=ref)
+            console.print(f"[green]Removed '{escape(removed.label)}' ({escape(removed.id)}) from SoT.[/green]")
+        except FileNotFoundError:
+            try:
+                record, removed = runtime.sessions.remove_source_entry(session_id, path=ref)
+                console.print(f"[green]Removed '{escape(removed.label)}' ({escape(removed.id)}) from SoT.[/green]")
+            except FileNotFoundError:
+                console.print(f"[red]Error: No entry with ID or path '{escape(ref)}' in session {escape(session_id)}.[/red]")
+                return 1
+        return 0
+
+    # Interactive default detection
+    is_interactive = not any([
+        args.status, args.command is not None,
+        args.run_task is not None, args.sot_attach is not None,
+        args.sot_show is not None, args.sot_delete is not None,
+        args.list_sessions, args.clean_sot is not None,
+    ])
+    if is_interactive and (
+        not getattr(args, "provider", None)
+        and not getattr(args, "session", None)
         and sys.stdin.isatty()
     ):
         available = [
@@ -1014,127 +1076,105 @@ def _dispatch(args: Namespace) -> int:
                 _configure_provider_credentials(chosen, sot_toml, sot_keys_toml)
                 runtime = bootstrap_runtime(args.config)
 
-    async def _run_with_cleanup():
+    return _do_async(runtime, args)
+
+
+def _do_async(runtime: AppRuntime, args: Namespace) -> int:
+    async def _run_cmd():
         try:
             await runtime.mcp.start()
-            if args.command in {None, "prompt", "chat"}:
-                return await _run_prompt(
-                    runtime, getattr(args, "session_id", None), getattr(args, "title", None),
-                    getattr(args, "provider", None), getattr(args, "model", None), getattr(args, "no_tools", False),
-                    subagent_model_override=getattr(args, "subagent_model", None),
-                    hypercompress=getattr(args, "hypercompress", False),
-                )
-            if args.command == "command":
+            if args.command is not None:
+                session_id, prompt_text = args.command
                 return await _run_command_turn(
-                    runtime, args.session_id, args.prompt, args.provider,
-                    args.model, args.no_tools, getattr(args, "disable_delegation", False)
+                    runtime, session_id, prompt_text, args.provider,
+                    args.model, args.no_tools, args.disable_delegation,
                 )
-            if args.command == "run_task":
-                return await _run_task(runtime, args.agent_id, args.prompt)
+            if args.run_task is not None:
+                agent_id, prompt_text = args.run_task
+                return await _run_task(runtime, agent_id, prompt_text)
+            # Interactive mode (default)
+            return await _run_prompt(
+                runtime, getattr(args, "session", None),
+                getattr(args, "title", None),
+                getattr(args, "provider", None),
+                getattr(args, "model", None),
+                getattr(args, "no_tools", False),
+                subagent_model_override=getattr(args, "subagent_model", None),
+                hypercompress=getattr(args, "hypercompress", False),
+            )
         finally:
             try:
                 await runtime.mcp.close()
             except Exception:
                 pass
 
-    if args.command in {None, "prompt", "chat", "command", "run_task"}:
-        return asyncio.run(_run_with_cleanup())
-
-    if args.command == "status":
-        _print_status(runtime)
-        return 0
-
-
-    if args.command == "sot_attach":
-        record = runtime.sessions.attach_path(
-            session_id=args.session_id, target_path=args.target,
-            label=args.label, recursive=not args.non_recursive,
-        )
-        console.print(f"[green]Attached to SoT in session {escape(record.id)}[/green]")
-        return 0
-
-    if args.command == "sot_show":
-        _print_sot(runtime, args.session_id)
-        return 0
-
-    if args.command == "sot_delete":
-        ref = args.ref
-        try:
-            record, removed = runtime.sessions.remove_source_entry(args.session_id, entry_id=ref)
-            console.print(f"[green]Removed '{escape(removed.label)}' ({escape(removed.id)}) from SoT.[/green]")
-        except FileNotFoundError:
-            try:
-                record, removed = runtime.sessions.remove_source_entry(args.session_id, path=ref)
-                console.print(f"[green]Removed '{escape(removed.label)}' ({escape(removed.id)}) from SoT.[/green]")
-            except FileNotFoundError:
-                console.print(f"[red]Error: No entry with ID or path '{escape(ref)}' in session {escape(args.session_id)}.[/red]")
-                return 1
-        return 0
-
-    raise ValueError(f"Unknown command: {args.command}")
+    needs_async = (
+        args.command is not None
+        or args.run_task is not None
+        or True  # interactive is always async
+    )
+    if needs_async:
+        return asyncio.run(_run_cmd())
+    raise ValueError(f"No command specified. Use --prompt to start a session, --help for options.")
 
 
 # ── Parser ───────────────────────────────────────────────────────────────
 
 
 def _build_parser() -> ArgumentParser:
-    parser = ArgumentParser(prog="sot-cli")
-    parser.add_argument("--config", default=None, help="Path to sot.toml")
-    parser.add_argument("--list_sessions", action="store_true", help="List all sessions as JSON")
-    parser.add_argument("--clean_sot", default=None, metavar="SESSION_ID", help="Remove all SoT tracked files from a session")
-    subparsers = parser.add_subparsers(dest="command")
-
+    parser = ArgumentParser(
+        prog="sot-cli",
+        formatter_class=RawDescriptionHelpFormatter,
+        epilog="""\
+Examples:
+  sot-cli                         Start a new interactive session
+  sot-cli --prompt                Same as above (explicit)
+  sot-cli "write tests"           New session with initial prompt
+  sot-cli --session SESSION_ID    Resume session by ID
+  sot-cli --session SESSION_ID --hypercompress  Compress history before resume
+  sot-cli --list_sessions         List all sessions as JSON
+  sot-cli --status                List sessions as table
+  sot-cli --clean_sot SESSION_ID  Remove SoT files from a session
+  sot-cli --config /path/sot.toml Use a non-default config file
+  sot-cli --session SESSION_ID --provider openrouter --model x-ai/grok-4.1
+  sot-cli --prompt --subagent_model anthropic/claude-sonnet-4
+  sot-cli --prompt --title "my session"
+  sot-cli --command SESSION_ID "run tests" --no-tools
+  sot-cli --run_task agent_1 "find the bug"
+""",
+    )
     _PROVIDER_CHOICES = ["lmstudio", "openrouter", "openai", "xai", "ollama", "nvidia"]
 
-    prompt = subparsers.add_parser("prompt", help="Start or resume an interactive session")
-    prompt.add_argument("session_id", nargs="?", default=None, help="Resume an existing session by ID")
-    prompt.add_argument("--title", default=None, help="Title for the new session")
-    prompt.add_argument("--provider", choices=_PROVIDER_CHOICES, default=None)
-    prompt.add_argument("--model", default=None)
-    prompt.add_argument("--no-tools", action="store_true", help="Plain chat without tool loop")
-    prompt.add_argument("--hypercompress", action="store_true", help="Run hyper-compression on session history before starting")
-    prompt.add_argument("--subagent_model", default=None, help="Override sub-agent model")
+    # ── Global options ──
+    parser.add_argument("--config", default=None, help="Path to sot.toml")
+    parser.add_argument("--list_sessions", action="store_true", help="List all sessions as JSON")
+    parser.add_argument("--clean_sot", metavar="SESSION_ID", default=None, help="Remove all SoT tracked files from a session")
 
-    chat = subparsers.add_parser("chat", help="Alias for prompt")
-    chat.add_argument("session_id", nargs="?", default=None)
-    chat.add_argument("--title", default=None)
-    chat.add_argument("--provider", choices=_PROVIDER_CHOICES, default=None)
-    chat.add_argument("--model", default=None)
-    chat.add_argument("--no-tools", action="store_true")
-    chat.add_argument("--hypercompress", action="store_true")
-    chat.add_argument("--subagent_model", default=None, help="Override sub-agent model")
+    # ── Interactive session ──
+    parser.add_argument("--prompt", "-p", nargs="?", const=True, default=None, metavar="TEXT", help="Start an interactive session (optional initial prompt)")
+    parser.add_argument("--session", metavar="SESSION_ID", default=None, help="Resume an existing session by ID")
+    parser.add_argument("--title", default=None, help="Title for the new session")
+    parser.add_argument("--provider", choices=_PROVIDER_CHOICES, default=None)
+    parser.add_argument("--model", default=None)
+    parser.add_argument("--no-tools", action="store_true", help="Plain chat without tool loop")
+    parser.add_argument("--hypercompress", action="store_true", help="Run hyper-compression on session history first")
+    parser.add_argument("--subagent_model", default=None, help="Override sub-agent model")
 
-    cmd = subparsers.add_parser("command", help="Run a single turn (multi-agent / automation)")
-    cmd.add_argument("session_id", help="Session ID to run against")
-    cmd.add_argument("prompt", help="The prompt to send")
-    cmd.add_argument("--provider", choices=_PROVIDER_CHOICES, default=None)
-    cmd.add_argument("--model", default=None)
-    cmd.add_argument("--no-tools", action="store_true")
-    cmd.add_argument("--subagent_model", default=None, help="Override sub-agent model")
-    cmd.add_argument(
-        "--disable-delegation",
-        action="store_true",
-        help="Disable the delegate_task tool to prevent infinite recursion",
-    )
+    # ── Alias ──
+    parser.add_argument("--chat", "-c", nargs="?", const=True, default=None, metavar="TEXT", help="Alias for --prompt")
 
-    run_task = subparsers.add_parser("run_task", help="Run an agent by ID inside the sessions directory (agent_N)")
-    run_task.add_argument("agent_id", help="Agent ID to run (e.g. agent_1)")
-    run_task.add_argument("prompt", help="The task prompt")
+    # ── One-shot commands ──
+    parser.add_argument("--command", nargs=2, metavar=("SESSION_ID", "PROMPT"), default=None, help="Run a single turn")
+    parser.add_argument("--run_task", nargs=2, metavar=("AGENT_ID", "PROMPT"), default=None, help="Run an agent by ID inside the sessions directory")
 
-    subparsers.add_parser("status", help="List sessions")
+    # ── Session management ──
+    parser.add_argument("--status", action="store_true", help="List sessions as table")
+    parser.add_argument("--sot_attach", nargs=2, metavar=("SESSION_ID", "PATH"), default=None, help="Attach a path to a session's Source of Truth")
+    parser.add_argument("--sot_show", metavar="SESSION_ID", default=None, help="Show Source of Truth entries for a session")
+    parser.add_argument("--sot_delete", nargs=2, metavar=("SESSION_ID", "REF"), default=None, help="Remove an entry from a session's Source of Truth")
 
-    sot_a = subparsers.add_parser("sot_attach", help="Attach a path to a session's Source of Truth")
-    sot_a.add_argument("session_id")
-    sot_a.add_argument("target", help="File or directory path to attach")
-    sot_a.add_argument("--label", default=None)
-    sot_a.add_argument("--non-recursive", action="store_true")
-
-    sot_s = subparsers.add_parser("sot_show", help="Show Source of Truth entries for a session")
-    sot_s.add_argument("session_id")
-
-    sot_d = subparsers.add_parser("sot_delete", help="Remove an entry from the Source of Truth")
-    sot_d.add_argument("session_id")
-    sot_d.add_argument("ref", help="Short ID or full path of the entry to remove")
+    # ── Command-specific flags ──
+    parser.add_argument("--disable-delegation", action="store_true", help="Disable the delegate_task tool to prevent infinite recursion")
 
     return parser
 
